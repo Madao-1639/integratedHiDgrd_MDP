@@ -13,12 +13,15 @@ def gen_hp(trial,args):
     hidden_sizes = [trial.suggest_int(f'hidden_size_{layer}', 3, 12) for layer in range(1,n_layers+1)]
         # Other hyperparams
     params = {
-        'SC_dnn_hidden_sizes': hidden_sizes,
-        # 'Base_lstm_hidden_size':trial.suggest_int('lstm_hidden_size', 16, 64, log = True),
-        # 'mfe_loss_weight': trial.suggest_float('mfe_loss_weight', 0.05, 0.10),
-        # 'mvf_loss_weight': trial.suggest_float('mvf_loss_weight', 0.01, 0.1),
-        'mon_loss_weight': trial.suggest_float('mon_loss_weight', 5, 10),
-        'con_loss_weight': trial.suggest_float('con_loss_weight', 1, 5),
+        'dnn_hidden_sizes': hidden_sizes,
+        'lstm_hidden_size':trial.suggest_int('lstm_hidden_size', 8, 64, log = True),
+        'mfe_loss_weight': trial.suggest_float('mfe_loss_weight', 0.01, 1.00, log = True),
+        # 'mvf_loss_weight': trial.suggest_float('mvf_loss_weight', 0.8, 1.2),
+        # 'mon_loss_weight': trial.suggest_float('mon_loss_weight', 0.1, 0.8),
+        # 'con_loss_weight': trial.suggest_float('con_loss_weight', 0.01, 0.5, log = True),
+
+        # Special hyperparams
+        'MS_fix_point':trial.suggest_int('fix_point', 70, 100),
     }
     # Set new hyperparams to args
     for key, value in params.items():
