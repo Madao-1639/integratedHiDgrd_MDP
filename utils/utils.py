@@ -41,3 +41,13 @@ def test4norm(hi_dict,sig_list = (0.01,0.05,0.10)):
                     else:
                         break
     return nt_summary
+
+def plot_hi(hi_dict,record_UUTs,**fig_kwargs):
+    import matplotlib.pyplot as plt
+    fig = plt.figure(**fig_kwargs)
+    for UUT in record_UUTs:
+        hi = hi_dict[UUT]
+        plt.plot(hi,'-',lw=0.5,alpha=0.75,label=UUT)
+    plt.legend()
+    plt.tight_layout()
+    return fig

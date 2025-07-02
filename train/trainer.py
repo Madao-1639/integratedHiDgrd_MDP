@@ -4,14 +4,13 @@ from torch.optim import Adam
 
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 from sklearn.metrics import confusion_matrix, recall_score, precision_score, f1_score
 
 from utils.data import select_loader
 from model import BaseRTF, BaseTW, SC_DNN, Integrated_DNN_LSTM, MSRTF#, MSTW
 from loss import FocalLoss,MVFLoss,MONLoss,CONLoss
 from utils.logger import Logger
-from utils.utils import test4norm
+from utils.utils import test4norm, plot_hi
 
 
 
@@ -153,13 +152,7 @@ class BaseTrainer(ABC):
 
         # Plot selected HI
         if self.logger and (epoch % self.args.record_freq == 0):
-            fig = plt.figure(figsize=(10,5))
-            for UUT in self.record_UUTs:
-                hi = hi_dict[UUT]
-                plt.plot(hi,'-',lw=0.5,alpha=0.75,label=UUT)
-            plt.legend()
-            # plt.title(f'epoch:{epoch}')
-            plt.tight_layout()
+            fig = plot_hi(hi_dict,self.record_UUTs,figsize=(10,5))
             self.logger.writer.add_figure(f'HI/{self.args.record_HI}',fig,epoch)
 
         return hi_dict
@@ -227,13 +220,7 @@ class BaseRTFTrainer(BaseTrainer):
 
             # Plot selected HI
             if epoch % self.args.record_freq == 0:
-                fig = plt.figure(figsize=(10,5))
-                for UUT in self.record_UUTs:
-                    hi = hi_dict[UUT]
-                    plt.plot(hi,'-',lw=0.5,alpha=0.75,label=UUT)
-                plt.legend()
-                # plt.title(f'epoch:{epoch}')
-                plt.tight_layout()
+                fig = plot_hi(hi_dict,self.record_UUTs,figsize=(10,5))
                 self.logger.writer.add_figure(f'HI/{self.args.record_HI}',fig,epoch)
 
         return hi_dict
@@ -476,6 +463,7 @@ class MSRTFTrainer(BaseRTFTrainer):
             hi,p = self.model(X)
             hi_dict[UUT] = hi.detach().numpy()
             deg_hi_dict[UUT] = self.model.transform_deg_hi(hi).detach().numpy()
+
         if self.logger:
             # Log theta dist
             self.logger.record_histogram('theta/train',self.model.theta_train)
@@ -487,13 +475,9 @@ class MSRTFTrainer(BaseRTFTrainer):
 
             # Plot selected HI
             if epoch % self.args.record_freq == 0:
-                fig = plt.figure(figsize=(10,5))
-                for UUT in self.record_UUTs:
-                    hi = hi_dict[UUT]
-                    plt.plot(hi,'-',lw=0.5,alpha=0.75,label=UUT)
-                plt.legend()
-                # plt.title(f'epoch:{epoch}')
-                plt.tight_layout()
-                self.logger.writer.add_figure(f'HI/{self.args.record_HI}',fig,epoch)
+                hi_fig = plot_hi(hi_dict,self.record_UUTs,figsize=(10,5))
+                self.logger.writer.add_figure(f'HI/{self.args.record_HI}',hi_fig,epoch)
+                deg_hi_fig = plot_hi(deg_hi_dict,self.record_UUTs,figsize=(10,5))
+                self.logger.writer.add_figure(f'HI/{self.args.record_HI}',deg_hi_fig,epoch)
 
-        return hi_dict
+        return hi_dict, deg_hi_dict
