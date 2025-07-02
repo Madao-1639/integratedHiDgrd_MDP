@@ -211,7 +211,7 @@ class BaseRTFTrainer(BaseTrainer):
             hi_dict[UUT] = hi.detach().numpy()
         if self.logger:
             # Log theta dist
-            self.logger.record_histogram('theta/train',self.model.theta_train)
+            self.logger.writer.add_histogram('theta/train',self.model.theta_train,epoch)
 
             # Test for normality
             nt_summary = test4norm(hi_dict,sig_list=(0.01,0.05,0.10))
@@ -466,7 +466,9 @@ class MSRTFTrainer(BaseRTFTrainer):
 
         if self.logger:
             # Log theta dist
-            self.logger.record_histogram('theta/train',self.model.theta_train)
+            self.logger.writer.add_histogram('theta/train',self.model.theta_train,epoch)
+            self.logger.writer.add_scalar('phi',self.model.hi_transformer.phi,epoch)
+            self.logger.writer.add_scalar('bias',self.model.get_flex_coef.bias,epoch)
 
             # Test for normality
             nt_summary = test4norm(deg_hi_dict,sig_list=(0.01,0.05,0.10))

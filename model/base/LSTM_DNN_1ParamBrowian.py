@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from ..CustomActFunc import select_activate
-
+from loss import _loss_reduction
 
 
 class BaseRTF(nn.Module):
@@ -43,17 +43,21 @@ class BaseRTF(nn.Module):
     def mfe_loss(self,x,UUT, reduction = 'mean'):
         idx = self.train_UUT_dict[UUT]
         theta = self.theta_train[idx]
-        n = x.shape[0]
-        part1 = torch.log(self.sigma_square)
-        part2 = ((x[0] - theta).square() + (x.diff() - theta).square().sum()) / self.sigma_square
-        if reduction == 'mean':
-            return part1 + part2 / n
-        elif reduction == 'sum':
-            return n * part1 + part2
-        else:
-            raise ValueError(
-            f"Invalid Value for arg 'reduction': '{reduction} \n Supported reduction modes: 'mean', 'sum'"
-        )
+        loss = torch.log(self.sigma_square + 1e-7) + \
+            (x.diff(prepend=torch.FloatTensor([0])) - theta).square()
+        return _loss_reduction(loss, reduction)
+
+        # n = x.shape[0]
+        # part1 = torch.log(self.sigma_square)
+        # part2 = ((x[0] - theta).square() + (x.diff() - theta).square().sum()) / self.sigma_square
+        # if reduction == 'mean':
+        #     return part1 + part2 / n
+        # elif reduction == 'sum':
+        #     return n * part1 + part2
+        # else:
+        #     raise ValueError(
+        #     f"Invalid Value for arg 'reduction': '{reduction} \n Supported reduction modes: 'mean', 'sum'"
+        # )
 
 
 class BaseTW(BaseRTF):
@@ -78,13 +82,4 @@ class BaseTW(BaseRTF):
         indice = self._UUT2idx(UUT)
         theta = self.theta_train[indice]
         loss = torch.log(self.sigma_square) + torch.square(hi_cur - hi_pre - theta)/self.sigma_square
-        if reduction == 'none':
-            return loss
-        elif reduction == 'sum':
-            return loss.sum()
-        elif reduction == 'mean':
-            return loss.mean()
-        else:
-            raise ValueError(
-            f"Invalid Value for arg 'reduction': '{reduction} \n Supported reduction modes: 'none', 'mean', 'sum'"
-        )
+        return _loss_reduction(loss,reduction)

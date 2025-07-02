@@ -11,7 +11,6 @@ class Logger:
             log_name = log_name + '_' + comment
         self.log_path = os.path.join(args.log_path, log_name)
         self.writer = SummaryWriter(self.log_path, **writer_kwargs)
-        # self.recorder = Recorder()
         self.scalar_dict = defaultdict(list)
         self.scalars_dict = defaultdict(lambda: defaultdict(list))
         self.histogram_dict = defaultdict(list)
@@ -21,15 +20,12 @@ class Logger:
 
     def record_scalar(self, tag, value):
         self.scalar_dict[tag].append(value)
-        # self.recorder.record_scalar(tag, value)
     
     def record_scalars(self, main_tag, tag, value):
         self.scalars_dict[main_tag][tag].append(value)
-        # self.recorder.record_scalars(main_tag, tag, value)
 
-    def record_histogram(self, tag, values):
-        self.histogram_dict[tag].append(values)
-        # self.recorder.record_histogram(tag, values)
+    def record_histogram(self, tag, value):
+        self.histogram_dict[tag].append(value)
 
     def record_normaltest(self,test_name,test_result):
         self.normaltest_dict[test_name].extend(test_result)
@@ -49,10 +45,9 @@ class Logger:
             self.writer.add_scalars(main_tag, tag_scalar_dict, global_step)
 
     def save_histogram(self, global_step,):
-        for tag in list(self.histogram_dict.keys()):
-            values = sum(self.histogram_dict[tag]) / len(self.histogram_dict[tag])
-            del self.histogram_dict[tag]
+        for tag,values in list(self.histogram_dict.items()):
             self.writer.add_histogram(tag, values, global_step)
+            del self.histogram_dict[tag]
 
     def save_metrics(self,global_step,):
         self.save_scalar(global_step,)
