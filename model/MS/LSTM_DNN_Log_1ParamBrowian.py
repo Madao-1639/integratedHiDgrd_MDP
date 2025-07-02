@@ -2,21 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from ..base.LSTM_DNN_1ParamBrowian import BaseRTF
+from .CustomFlexCoef import select_flex_coef
 from loss import _loss_reduction
-
-def select_flex_coef(flex_type,**kw_flex):
-    if flex_type == 'ReLULBias':
-        return ReLULBias(**kw_flex)
-
-
-
-class ReLULBias(nn.Module):
-    '''ReLU with a learnable bias'''
-    def __init__(self,bias=10):
-        super().__init__()
-        self.bias = nn.Parameter(torch.FloatTensor([bias]))
-    def forward(self,x):
-        return F.relu(x+self.bias)
 
 class LLT(nn.Module):
     '''Learnable Logarithm Transformer'''
