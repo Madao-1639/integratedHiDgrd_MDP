@@ -28,8 +28,7 @@ class MSRTF(BaseRTF):
             return super().mfe_loss(x,UUT, reduction)
         else:
             reduction = 'sum' if reduction == 'mean' else reduction
-            x = self.hi_transformer(x)
-            loss = self.get_flex_coef(x)@super().mfe_loss(x,UUT, reduction='none')
+            loss = self.get_flex_coef(x)@super().mfe_loss(self.hi_transformer(x),UUT, reduction='none')
             return _loss_reduction(loss,reduction)
 
     @torch.no_grad
