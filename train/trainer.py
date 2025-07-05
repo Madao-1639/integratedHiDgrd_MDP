@@ -467,8 +467,8 @@ class MSRTFTrainer(BaseRTFTrainer):
         if self.logger:
             # Log theta dist
             self.logger.writer.add_histogram('theta/train',self.model.theta_train,epoch)
-            self.logger.writer.add_scalar('phi',self.model.hi_transformer.phi,epoch)
-            self.logger.writer.add_scalar('bias',self.model.get_flex_coef.bias,epoch)
+            # self.logger.writer.add_scalar('phi',self.model.hi_transformer.phi,epoch)
+            # self.logger.writer.add_scalar('bias',self.model.get_flex_coef.bias,epoch)
 
             # Test for normality
             nt_summary = test4norm(deg_hi_dict,sig_list=(0.01,0.05,0.10))
@@ -479,7 +479,7 @@ class MSRTFTrainer(BaseRTFTrainer):
             if epoch % self.args.record_freq == 0:
                 hi_fig = plot_hi(hi_dict,self.record_UUTs,figsize=(10,5))
                 self.logger.writer.add_figure(f'HI/{self.args.record_HI}',hi_fig,epoch)
-                deg_hi_fig = plot_hi(deg_hi_dict,self.record_UUTs,figsize=(10,5))
-                self.logger.writer.add_figure(f'HI/{self.args.record_HI}',deg_hi_fig,epoch)
+                # deg_hi_fig = plot_hi(deg_hi_dict,self.record_UUTs,figsize=(10,5))
+                # self.logger.writer.add_figure(f'deg_HI/{self.args.record_HI}',deg_hi_fig,epoch)
 
         return hi_dict, deg_hi_dict
