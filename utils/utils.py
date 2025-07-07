@@ -11,12 +11,12 @@ def set_seed(seed):
     torch.backends.cudnn.deterministic = True
     os.environ['PYTHONHASHSEED'] = str(seed)
 
-def test4norm(hi_dict,sig_list = (0.01,0.05,0.10)):
+def test4norm(hi_dict,sig_list = (0.01,0.05,0.10),prepend=0):
     '''Test for normality'''
     from scipy.stats import kstest,shapiro,normaltest,anderson
     nt_summary = {}
     for UUT,hi in hi_dict.items():
-        resInc = np.diff(hi,prepend=0)
+        resInc = np.diff(hi,prepend=prepend)
         nt_result = {
             'KS': kstest(resInc,cdf='norm'),
             'SW': shapiro(resInc),
