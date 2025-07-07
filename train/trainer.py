@@ -152,7 +152,7 @@ class BaseTrainer(ABC):
 
         # Plot selected HI
         if self.logger and (epoch % self.args.record_freq == 0):
-            fig = plot_hi(hi_dict,self.record_UUTs,figsize=(10,5))
+            fig = plot_hi(hi_dict,self.record_UUTs)
             self.logger.writer.add_figure(f'HI/{self.args.record_HI}',fig,epoch)
 
         return hi_dict
@@ -220,7 +220,7 @@ class BaseRTFTrainer(BaseTrainer):
 
             # Plot selected HI
             if epoch % self.args.record_freq == 0:
-                fig = plot_hi(hi_dict,self.record_UUTs,figsize=(10,5))
+                fig = plot_hi(hi_dict,self.record_UUTs)
                 self.logger.writer.add_figure(f'HI/{self.args.record_HI}',fig,epoch)
 
         return hi_dict
@@ -477,9 +477,9 @@ class MSRTFTrainer(BaseRTFTrainer):
 
             # Plot selected HI
             if epoch % self.args.record_freq == 0:
-                hi_fig = plot_hi(hi_dict,self.record_UUTs,figsize=(10,5))
+                hi_fig = plot_hi(hi_dict,self.record_UUTs)
                 self.logger.writer.add_figure(f'HI/{self.args.record_HI}',hi_fig,epoch)
-                # deg_hi_fig = plot_hi(deg_hi_dict,self.record_UUTs,figsize=(10,5))
+                # deg_hi_fig = plot_hi(deg_hi_dict,self.record_UUTs)
                 # self.logger.writer.add_figure(f'deg_HI/{self.args.record_HI}',deg_hi_fig,epoch)
 
         return hi_dict, deg_hi_dict

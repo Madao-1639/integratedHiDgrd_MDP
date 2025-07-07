@@ -44,6 +44,9 @@ def test4norm(hi_dict,sig_list = (0.01,0.05,0.10)):
 
 def plot_hi(hi_dict,record_UUTs,**fig_kwargs):
     import matplotlib.pyplot as plt
+    # Default figure parameters
+    fig_kwargs['figsize'] = fig_kwargs.get('figsize', (10, 5))
+
     fig = plt.figure(**fig_kwargs)
     for UUT in record_UUTs:
         hi = hi_dict[UUT]
