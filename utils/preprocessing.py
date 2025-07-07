@@ -4,12 +4,12 @@ import math
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
 
 class LogTransformer:
-    def __init__(self,delta=1):
-        self.delta = delta
+    def __init__(self,_delta=1):
+        self.delta = _delta
     def fit(self,data):
-        self.phi = data.min() - self.delta
+        self.phi = - data.min() + self.delta
     def transform(self,data):
-        return np.log(data-self.phi)
+        return np.log(data+self.phi)
     def fit_transform(self,data):
         self.fit(data)
         return self.transform(data)
