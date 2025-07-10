@@ -165,7 +165,7 @@ class BaseRTFTrainer(BaseTrainer):
     def get_model(self):
         self.model = BaseRTF(self.args, self.ls_dict.index)
         if self.args.load_model_fp:
-            self.model.load_state_dict(torch.load(self.args.load_model_fp, weights_only=False))
+            self.model.load_state_dict(torch.load(self.args.load_model_fp, weights_only=False),strict=False)
         self.model.to(self.device)
         # example_input = torch.randn((self.args.input_size,20))
         # self.logger.writer.add_graph(self.model,example_input)
@@ -210,8 +210,9 @@ class BaseRTFTrainer(BaseTrainer):
             hi,p = self.model(X)
             hi_dict[UUT] = hi.detach().numpy()
         if self.logger:
-            # Log theta dist
+            # Log parameters
             self.logger.writer.add_histogram('theta/train',self.model.theta_train,epoch)
+            self.logger.writer.add_scalar('sigma_square',self.model.sigma_square,epoch)
 
             # Test for normality
             nt_summary = test4norm(hi_dict,sig_list=(0.01,0.05,0.10))
@@ -245,7 +246,7 @@ class BaseTWTrainer(BaseRTFTrainer):
     def get_model(self):
         self.model = BaseTW(self.args, self.ls_dict.index)
         if self.args.load_model_fp:
-            self.model.load_state_dict(torch.load(self.args.load_model_fp, weights_only=False))
+            self.model.load_state_dict(torch.load(self.args.load_model_fp, weights_only=False),strict=False)
         self.model.to(self.device)
         # example_input = torch.randn((self.args.window_width,self.args.input_size,))
         # self.logger.writer.add_graph(self.model,example_input)
@@ -310,7 +311,7 @@ class SCTrainer(BaseTrainer):
     def get_model(self):
         self.model = SC_DNN(self.args)
         if self.args.load_model_fp:
-            self.model.load_state_dict(torch.load(self.args.load_model_fp, weights_only=False))
+            self.model.load_state_dict(torch.load(self.args.load_model_fp, weights_only=False),strict=False)
         self.model.to(self.device)
         # example_input = torch.randn((self.args.input_size,))
         # self.logger.writer.add_graph(self.model,example_input)
@@ -386,7 +387,7 @@ class IntegratedTrainer(BaseTrainer):
     def get_model(self):
         self.model = Integrated_DNN_LSTM(self.args, self.ls_dict.index)
         if self.args.load_model_fp:
-            self.model.load_state_dict(torch.load(self.args.load_model_fp, weights_only=False))
+            self.model.load_state_dict(torch.load(self.args.load_model_fp, weights_only=False),strict=False)
         self.model.to(self.device)
         # example_input = torch.randn((self.args.input_size,20))
         # self.logger.writer.add_graph(self.model,example_input)
@@ -439,7 +440,8 @@ class IntegratedTrainer(BaseTrainer):
             'total_loss': total_loss
         }
         return loss
-    
+
+
 
 class MSRTFTrainer(BaseRTFTrainer):
     '''MSRTF Model Trainer'''
@@ -447,7 +449,7 @@ class MSRTFTrainer(BaseRTFTrainer):
     def get_model(self):
         self.model = MSRTF(args=self.args, train_UUTs=self.ls_dict.index)
         if self.args.load_model_fp:
-            self.model.load_state_dict(torch.load(self.args.load_model_fp, weights_only=False))
+            self.model.load_state_dict(torch.load(self.args.load_model_fp, weights_only=False),strict=False)
         self.model.to(self.device)
         # example_input = torch.randn((self.args.input_size,20))
         # self.logger.writer.add_graph(self.model,example_input)
@@ -465,10 +467,12 @@ class MSRTFTrainer(BaseRTFTrainer):
             deg_hi_dict[UUT] = self.model.transform_deg_hi(hi).detach().numpy()
 
         if self.logger:
-            # Log theta dist
+            # Log parameters
             self.logger.writer.add_histogram('theta/train',self.model.theta_train,epoch)
-            # self.logger.writer.add_scalar('phi',self.model.hi_transformer.phi,epoch)
-            # self.logger.writer.add_scalar('bias',self.model.get_flex_coef.bias,epoch)
+            self.logger.writer.add_scalar('sigma_square',self.model.sigma_square,epoch)
+            self.logger.writer.add_scalar('phi',self.model.hi_transformer.phi,epoch)
+            if self.args.MS_flex_type == 'ReLULBias':
+                self.logger.writer.add_scalar('bias',self.model.get_flex_coef.bias,epoch)
 
             # Test for normality
             nt_summary = test4norm(deg_hi_dict,sig_list=(0.01,0.05,0.10))
@@ -479,7 +483,7 @@ class MSRTFTrainer(BaseRTFTrainer):
             if epoch % self.args.record_freq == 0:
                 hi_fig = plot_hi(hi_dict,self.record_UUTs)
                 self.logger.writer.add_figure(f'HI/{self.args.record_HI}',hi_fig,epoch)
-                # deg_hi_fig = plot_hi(deg_hi_dict,self.record_UUTs)
-                # self.logger.writer.add_figure(f'deg_HI/{self.args.record_HI}',deg_hi_fig,epoch)
+                deg_hi_fig = plot_hi(deg_hi_dict,self.record_UUTs)
+                self.logger.writer.add_figure(f'deg_HI/{self.args.record_HI}',deg_hi_fig,epoch)
 
         return hi_dict, deg_hi_dict
