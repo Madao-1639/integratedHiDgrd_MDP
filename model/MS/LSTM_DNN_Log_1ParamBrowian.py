@@ -19,6 +19,7 @@ class MSRTF(BaseRTF):
     def __init__(self,phi=9,_delta=1e-7,**Base_kwargs):
         super().__init__(**Base_kwargs)
         self.fix_point = Base_kwargs['args'].MS_fix_point
+        self.drop_first = Base_kwargs['args'].MS_drop_first
         self.get_flex_coef = select_flex_coef(Base_kwargs['args'].MS_flex_type)
         self.hi_transformer = LLT(phi,_delta)
 
@@ -27,6 +28,7 @@ class MSRTF(BaseRTF):
             x = self.hi_transformer(x[self.fix_point-1:])
             return super().mfe_loss(x,UUT, reduction)
         else:
+            x = x[self.drop_first:]
             reduction = 'sum' if reduction == 'mean' else reduction
             loss = self.get_flex_coef(x)@super().mfe_loss(self.hi_transformer(x),UUT, reduction='none')
             return _loss_reduction(loss,reduction)
@@ -36,6 +38,7 @@ class MSRTF(BaseRTF):
         if self.fix_point is not None:
             turning_index = self.fix_point-1
         else:
+            hi = hi[self.drop_first:]
             flex_coef = self.get_flex_coef(hi)
             turning_index = torch.min(torch.argwhere(flex_coef >= _epsilon))
         return self.hi_transformer(hi[turning_index:])

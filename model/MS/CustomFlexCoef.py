@@ -8,7 +8,7 @@ def select_flex_coef(flex_type,**kw_flex):
 
 class ReLULBias(nn.Module):
     '''ReLU with a learnable bias'''
-    def __init__(self,bias=10):
+    def __init__(self,bias=7.8):
         super().__init__()
         self.bias = nn.Parameter(torch.FloatTensor([bias]))
     def forward(self,x):
