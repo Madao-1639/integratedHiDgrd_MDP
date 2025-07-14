@@ -47,17 +47,6 @@ class BaseRTF(nn.Module):
             (x.diff(prepend=torch.FloatTensor([0])) - theta).square()
         return _loss_reduction(loss, reduction)
 
-        # n = x.shape[0]
-        # part1 = torch.log(self.sigma_square)
-        # part2 = ((x[0] - theta).square() + (x.diff() - theta).square().sum()) / self.sigma_square
-        # if reduction == 'mean':
-        #     return part1 + part2 / n
-        # elif reduction == 'sum':
-        #     return n * part1 + part2
-        # else:
-        #     raise ValueError(
-        #     f"Invalid Value for arg 'reduction': '{reduction} \n Supported reduction modes: 'mean', 'sum'"
-        # )
 
 
 class BaseTW(BaseRTF):

@@ -108,7 +108,7 @@ class BaseTrainer(ABC):
                 # Record HI
                 if self.record_HI_loader is not None:
                     self.record_per_epoch(epoch)
-                    # Log results
+                # Log results
                 self.logger.save_metrics(epoch)
                 self.logger.save_checkpoint(self.model, epoch)
 
