@@ -191,6 +191,9 @@ class BaseRTFTrainer(BaseTrainer):
             total_loss.backward()
             self.optimizer.step()
 
+            # Constrain sigma_square to be big enough
+            self.model.sigma_square.data.clamp_(0.1)
+
             # Logger record loss
             if self.logger:
                 for k,v in loss.items():
@@ -470,7 +473,8 @@ class MSRTFTrainer(BaseRTFTrainer):
             # Log parameters
             self.logger.writer.add_histogram('theta/train',self.model.theta_train,epoch)
             self.logger.writer.add_scalar('sigma_square',self.model.sigma_square,epoch)
-            self.logger.writer.add_scalar('phi',self.model.hi_transformer.phi,epoch)
+            self.logger.writer.add_scalar('LLT/c1',self.model.hi_transformer.c1,epoch)
+            self.logger.writer.add_scalar('LLT/c2',self.model.hi_transformer.c2,epoch)
             if self.args.MS_flex_type == 'ReLULBias':
                 self.logger.writer.add_scalar('bias',self.model.get_flex_coef.bias,epoch)
 

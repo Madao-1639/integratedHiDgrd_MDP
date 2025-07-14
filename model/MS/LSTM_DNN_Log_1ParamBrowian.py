@@ -7,21 +7,22 @@ from loss import _loss_reduction
 
 class LLT(nn.Module):
     '''Learnable Logarithm Transformer'''
-    def __init__(self,phi=9,_delta=1e-7):
+    def __init__(self,c1=9,c2=-0.1,_delta=1e-7):
         super().__init__()
-        self.phi = nn.Parameter(torch.FloatTensor([phi]))
+        self.c1 = nn.Parameter(torch.FloatTensor([c1]))
+        self.c2 = nn.Parameter(torch.FloatTensor([c2]))
         self.delta = _delta
     def forward(self,x):
-        return torch.log(F.relu(x+self.phi)+self.delta)
+        return torch.log(F.relu(x+self.c1)+self.delta)+self.c2
 
 class MSRTF(BaseRTF):
     '''Multi-Stage model for RTF dataset'''
-    def __init__(self,phi=9,_delta=1e-7,**Base_kwargs):
+    def __init__(self,**Base_kwargs):
         super().__init__(**Base_kwargs)
         self.fix_point = Base_kwargs['args'].MS_fix_point
         self.drop_first = Base_kwargs['args'].MS_drop_first
         self.get_flex_coef = select_flex_coef(Base_kwargs['args'].MS_flex_type)
-        self.hi_transformer = LLT(phi,_delta)
+        self.hi_transformer = LLT()
 
     def mfe_loss(self,x,UUT, reduction = 'mean'):
         if self.fix_point is not None:
