@@ -15,7 +15,7 @@ def parse_common_args(parser):
     parser.add_argument('--cls_thres', type=float, default=0.5)
         # Multi-Stage
     parser.add_argument('--MS_fix_point', type=int, help='Fix turning point')
-    parser.add_argument('--MS_flex_type', type=str, choices=[None,'ReLULBias'], help='Flexible MFE loss coefficient type')
+    parser.add_argument('--MS_flex_type', type=str, choices=[None,'SReLU','LSReLU','SLSReLU'], help='Flexible MFE loss coefficient type')
     parser.add_argument('--MS_drop_first', type=int, default=10, help='Drop first N samples in MFE loss calculation')
 
     # Data Preprocessing

@@ -17,11 +17,11 @@ class LLT(nn.Module):
 
 class MSRTF(BaseRTF):
     '''Multi-Stage model for RTF dataset'''
-    def __init__(self,**Base_kwargs):
-        super().__init__(**Base_kwargs)
-        self.fix_point = Base_kwargs['args'].MS_fix_point
-        self.drop_first = Base_kwargs['args'].MS_drop_first
-        self.get_flex_coef = select_flex_coef(Base_kwargs['args'].MS_flex_type)
+    def __init__(self,args,**Base_kwargs):
+        super().__init__(args=args,**Base_kwargs)
+        self.fix_point = args.MS_fix_point
+        self.drop_first = args.MS_drop_first
+        self.get_flex_coef = select_flex_coef(args.MS_flex_type)
         self.hi_transformer = LLT()
 
     def mfe_loss(self,x,UUT, reduction = 'mean'):
@@ -41,5 +41,5 @@ class MSRTF(BaseRTF):
         else:
             hi = hi[self.drop_first:]
             flex_coef = self.get_flex_coef(hi)
-            turning_index = torch.min(torch.argwhere(flex_coef >= _epsilon))
+            turning_index = torch.min(torch.argwhere(flex_coef > _epsilon))
         return self.hi_transformer(hi[turning_index:])

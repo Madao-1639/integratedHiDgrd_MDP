@@ -4,7 +4,8 @@ from torch.optim import Adam
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import confusion_matrix, recall_score, precision_score, f1_score
+# from sklearn.metrics import confusion_matrix, recall_score, precision_score, f1_score
+from sklearn.metrics import precision_recall_fscore_support
 
 from utils.data import select_loader
 from model import BaseRTF, BaseTW, SC_DNN, Integrated_DNN_LSTM, MSRTF#, MSTW
@@ -129,14 +130,15 @@ class BaseTrainer(ABC):
             all_y_pred.append(y_pred)
         all_y_true = np.concatenate(all_y_true)
         all_y_pred = np.concatenate(all_y_pred)
+        precision, recall, f1, _ = precision_recall_fscore_support(all_y_true, all_y_pred, average='binary', zero_division=0)
         metric_result = {
-            'Recall': recall_score(all_y_true,all_y_pred, zero_division = 0),
-            'Precision': precision_score(all_y_true,all_y_pred, zero_division = 0),
-            'F1': f1_score(all_y_true,all_y_pred, zero_division = 0),
+            'Precision': precision,
+            'Recall': recall,
+            'F1': f1,
         }
         if self.logger:
             for metric_name,metric in metric_result.items():
-                self.logger.writer.add_scalar(f'{metric_name}/val',metric,epoch)
+                self.logger.writer.add_scalar(f'Metric/val_{metric_name}',metric,epoch)
         return metric_result
 
     def record_per_epoch(self,epoch: "int") -> dict:
@@ -219,8 +221,8 @@ class BaseRTFTrainer(BaseTrainer):
 
             # Test for normality
             nt_summary = test4norm(hi_dict,sig_list=(0.01,0.05,0.10))
-            for k,v in nt_summary.items():
-                self.logger.record_scalars(f'NomalTest/{self.args.record_HI}',k,v)
+            for test_name, test_result in nt_summary.items():
+                self.logger.writer.add_scalar(f'NomalTest/{self.args.record_HI}_{test_name}',test_result,epoch)
 
             # Plot selected HI
             if epoch % self.args.record_freq == 0:
@@ -473,15 +475,16 @@ class MSRTFTrainer(BaseRTFTrainer):
             # Log parameters
             self.logger.writer.add_histogram('theta/train',self.model.theta_train,epoch)
             self.logger.writer.add_scalar('sigma_square',self.model.sigma_square,epoch)
-            self.logger.writer.add_scalar('LLT/c1',self.model.hi_transformer.c1,epoch)
-            self.logger.writer.add_scalar('LLT/c2',self.model.hi_transformer.c2,epoch)
-            if self.args.MS_flex_type == 'ReLULBias':
-                self.logger.writer.add_scalar('bias',self.model.get_flex_coef.bias,epoch)
+            for param, value in self.model.hi_transformer.named_parameters(recurse=False):
+                self.logger.writer.add_scalar(f'LLT/{param}', value, epoch)
+            if self.args.MS_flex_type is not None:
+                for param, value in self.model.get_flex_coef.named_parameters(recurse=False):
+                    self.logger.writer.add_scalar(f'{self.args.MS_flex_type}/{param}',value,epoch)
 
             # Test for normality
             nt_summary = test4norm(deg_hi_dict,sig_list=(0.01,0.05,0.10))
-            for k,v in nt_summary.items():
-                self.logger.record_scalars(f'NomalTest/{self.args.record_HI}',k,v)
+            for test_name, test_result in nt_summary.items():
+                self.logger.writer.add_scalar(f'NomalTest/{self.args.record_HI}_{test_name}',test_result,epoch)
 
             # Plot selected HI
             if epoch % self.args.record_freq == 0:
