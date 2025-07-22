@@ -2,7 +2,7 @@ from .trainer import BaseRTFTrainer,BaseTWTrainer,SCTrainer,IntegratedTrainer,MS
 from utils.preprocessing import read_preprocess_data
 from utils.preprocessing import read_preprocess_data_NoiseAfterScale
 
-def get_trainer_by_type(model_type, data_type=None):
+def select_trainer_by_type(model_type, data_type=None):
     if model_type == 'Base':
         if data_type == 'RTF':
             return BaseRTFTrainer
@@ -18,26 +18,12 @@ def get_trainer_by_type(model_type, data_type=None):
         # elif data_type == 'TW':
         #     return MSTWTrainer
 
-def select_trainer(args,**trainer_kwargs):
-    Trainer = get_trainer_by_type(args.model_type,args.data_type)
-    if args.k_fold > 0:
-        return [Trainer(args,train_data,val_data,**trainer_kwargs) for train_data,val_data in read_preprocess_data(args)]
-    elif 0 < args.val_ratio < 1:
-        train_data, val_data = read_preprocess_data(args)
-        return Trainer(args,train_data,val_data,**trainer_kwargs)
-    else:
-        data = read_preprocess_data(args)
-        return Trainer(args,train_data=data,val_data=None,**trainer_kwargs)
+def get_trainer(args,**trainer_kwargs):
+    Trainer = select_trainer_by_type(args.model_type,args.data_type)
+    for train_data,val_data,test_data in read_preprocess_data(args):
+        yield Trainer(args,train_data=train_data,val_data=val_data,**trainer_kwargs)
 
-
-
-def select_trainer_NoiseAfterScale(args,**trainer_kwargs):
-    Trainer = get_trainer_by_type(args.model_type,args.data_type)
-    if args.k_fold > 0:
-        return [Trainer(args,train_data,val_data,**trainer_kwargs) for train_data,val_data in read_preprocess_data_NoiseAfterScale(args)]
-    elif 0 < args.val_ratio < 1:
-        train_data, val_data = read_preprocess_data_NoiseAfterScale(args)
-        return Trainer(args,train_data,val_data,**trainer_kwargs)
-    else:
-        data = read_preprocess_data_NoiseAfterScale(args)
-        return Trainer(args,train_data=data,val_data=None,**trainer_kwargs)
+def get_trainer_NoiseAfterScale(args,**trainer_kwargs):
+    Trainer = select_trainer_by_type(args.model_type,args.data_type)
+    for train_data,val_data,test_data in read_preprocess_data_NoiseAfterScale(args):
+        yield Trainer(args,train_data=train_data,val_data=val_data,**trainer_kwargs)

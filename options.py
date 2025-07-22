@@ -20,7 +20,7 @@ def parse_common_args(parser):
 
     # Data Preprocessing
     parser.add_argument('--drop_vars', nargs='*', type=int, default=[1,5,6,10,16,18,19], help='Drop duplicate variables')
-    parser.add_argument('--scaler_type', type=str, default='Standard', choices=['Standard','MinMax'],)
+    parser.add_argument('--scaler_type', type=str, default='Standard', choices=[None,'Standard','MinMax'],)
     parser.add_argument('--log_transform', action='store_true', help='Perform logarithm transformation when preprocessing data')
     parser.add_argument('--add_noise', action='store_true')
     parser.add_argument('--noise_type', type=str, default='gaussian', choices=['gaussian','white gaussian'])
@@ -33,6 +33,7 @@ def parse_common_args(parser):
 
     # I/O
     parser.add_argument('--load_model_fp', type=str, help='Model path for pretrain or test')
+    parser.add_argument('--test_ratio', type=float, default=0)
     parser.add_argument('--no_logger', action='store_false', dest='logger', default=True, help='Do not keep log')
     parser.add_argument('--log_path', type=str, default='log')
     parser.add_argument('--save_suffix', type=str, help='Comment for model')

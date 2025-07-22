@@ -138,7 +138,7 @@ class BaseTrainer(ABC):
         }
         if self.logger:
             for metric_name,metric in metric_result.items():
-                self.logger.writer.add_scalar(f'Metric/val_{metric_name}',metric,epoch)
+                self.logger.writer.add_scalar(f'Metric/{metric_name}',metric,epoch)
         return metric_result
 
     def record_per_epoch(self,epoch: "int") -> dict:

@@ -1,5 +1,5 @@
 import optuna
-from train import select_trainer
+from train import get_trainer
 from options import prepare_train_args
 from utils.utils import set_seed
 
@@ -32,8 +32,7 @@ def objective(trial):
     obj_metric = 'F1'
     gen_hp(trial,args)
     # Get trainer
-    trainer = select_trainer(args,\
-        opt_trial = trial)
+    trainer = get_trainer(args)
     # Train & Val & Report
     # best_obj = 0
     for epoch in range(1,args.num_epoch+1):
@@ -52,8 +51,7 @@ def objective_cv(trial):
     global args
     obj_metric = 'F1'
     gen_hp(trial,args)
-    trainer_seq = select_trainer(args,\
-        opt_trial = trial)
+    trainer_seq = list(get_trainer(args))
     best_obj = 0
     for epoch in range(1,args.num_epoch+1):
         obj_list = []
