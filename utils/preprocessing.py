@@ -138,14 +138,19 @@ def apply_transformations(data_split, scaler_type = 'Standard', log_transform = 
     return train_data, val_data, test_data
 
 
-def read_preprocess_data(args):
+def read_preprocess_data(args, data=None):
     '''
-    Read data from file, apply preprocessing, and generate splits.
+    Read data from file, apply preprocessing, and generate data splits (train_data, val_data, test_data).
+
+    Args:
+        args: Configuration namespace containing preprocessing and splitting parameters
+        data (Optional): Pre-loaded data. If None, data will be loaded from file.
     
     Yields:
-        Processed data splits (train_data, val_data, test_data) based on specified configuration.
+        Processed data splits based on specified configuration.
     '''
-    data = read_data(args.train_fp, args.drop_vars)
+    if data is None:
+        data = read_data(args.train_fp, args.drop_vars)
     if args.add_noise:
         data = add_noise(data,args.noise_type,args.noise_param)
 
@@ -165,8 +170,9 @@ def read_preprocess_data(args):
         yield apply_transformations((train_data, val_data, test_data), args.scaler_type, args.log_transform)
 
 
-def read_preprocess_data_NoiseAfterScale(args):
-    data = read_data(args.train_fp, args.drop_vars)
+def read_preprocess_data_NoiseAfterScale(args,data=None):
+    if data is None:
+        data = read_data(args.train_fp, args.drop_vars)
     if 0 < args.test_ratio < 1:
         data, test_data = gen_loo_data(data,args.test_ratio)
     else:

@@ -2,6 +2,7 @@ import optuna
 from train import get_trainer
 from options import prepare_train_args
 from utils.utils import set_seed
+from utils.preprocessing import read_data, gen_loo_data
 
 
 
@@ -28,11 +29,11 @@ def gen_hp(trial,args):
         setattr(args, key, value)
 
 def objective(trial):
-    global args
+    global args, data
     obj_metric = 'F1'
     gen_hp(trial,args)
     # Get trainer
-    trainer = get_trainer(args)
+    trainer = get_trainer(args,data)
     # Train & Val & Report
     # best_obj = 0
     for epoch in range(1,args.num_epoch+1):
@@ -48,10 +49,10 @@ def objective(trial):
     # return best_obj
 
 def objective_cv(trial):
-    global args
+    global args, data
     obj_metric = 'F1'
     gen_hp(trial,args)
-    trainer_seq = list(get_trainer(args))
+    trainer_seq = list(get_trainer(args,data))
     best_obj = 0
     for epoch in range(1,args.num_epoch+1):
         obj_list = []
@@ -81,6 +82,10 @@ study = optuna.create_study(
     # pruner=optuna.pruners.MedianPruner(),
     load_if_exists=True,
 )
+data = read_data(args.train_fp, args.drop_vars)
+if 0 < args.test_ratio < 1:
+    data, test_data = gen_loo_data(data,args.test_ratio)
+    args.test_ratio = 0
 if args.k_fold > 0:
     study.optimize(objective_cv, n_trials=200)
 else:

@@ -18,12 +18,12 @@ def select_trainer_by_type(model_type, data_type=None):
         # elif data_type == 'TW':
         #     return MSTWTrainer
 
-def get_trainer(args,**trainer_kwargs):
+def get_trainer(args,data=None,**trainer_kwargs):
     Trainer = select_trainer_by_type(args.model_type,args.data_type)
-    for train_data,val_data,test_data in read_preprocess_data(args):
+    for train_data,val_data,test_data in read_preprocess_data(args,data):
         yield Trainer(args,train_data=train_data,val_data=val_data,**trainer_kwargs)
 
-def get_trainer_NoiseAfterScale(args,**trainer_kwargs):
+def get_trainer_NoiseAfterScale(args,data=None,**trainer_kwargs):
     Trainer = select_trainer_by_type(args.model_type,args.data_type)
-    for train_data,val_data,test_data in read_preprocess_data_NoiseAfterScale(args):
+    for train_data,val_data,test_data in read_preprocess_data_NoiseAfterScale(args,data):
         yield Trainer(args,train_data=train_data,val_data=val_data,**trainer_kwargs)
