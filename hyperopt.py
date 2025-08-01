@@ -52,7 +52,7 @@ def objective_cv(trial):
     global args, data
     obj_metric = 'F1'
     gen_hp(trial,args)
-    trainer_seq = list(get_trainer(args,data))
+    trainer_seq = get_trainer(args,data)
     best_obj = 0
     for epoch in range(1,args.num_epoch+1):
         obj_list = []

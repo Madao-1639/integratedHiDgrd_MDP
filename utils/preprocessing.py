@@ -107,114 +107,98 @@ def select_scaler_by_type(scaler_type = 'Standard'):
     elif scaler_type == 'MinMax':
         return MinMaxScaler()
 
-def apply_transformations(data_split, scaler_type = 'Standard', log_transform = False):
+def apply_transformations(train_data, val_data=None, scaler_type = 'Standard', log_transform = False):
     '''
-    Apply scaling and logarithmic transformation to the data split.
+    Apply scaling and logarithmic transformation to train_data and val_data.
 
     Args:
-        data_split (tuple): (train_data, val_data, test_data)
-        scaler_type (str): Type of scaler.
-        log_transform (bool): Whether to apply logarithmic transformation.
+        train_data (pd.DataFrame): The training dataset containing features and possibly labels.
+        val_data (pd.DataFrame, optional): The validation dataset to be transformed using the same scaler/transformer as train_data. Defaults to None.
+        scaler_type (str, optional): The type of scaler to use for feature scaling (e.g., 'Standard', 'MinMax'). If None, no scaling is applied. Defaults to 'Standard'.
+        log_transform (bool, optional): Whether to apply a logarithmic transformation to the features after scaling. Defaults to False.
 
     Returns:
-        tuple: Transformed (train_data, val_data, test_data)
+        tuple: Transformed train_data and val_data.
     '''
-    train_data, val_data, test_data = data_split
     var_cols = [col for col in train_data.columns if col not in ('UUT','time','label')]
     if scaler_type is not None:
         scaler = select_scaler_by_type(scaler_type)
         train_data.loc[:,var_cols] = scaler.fit_transform(train_data.loc[:,var_cols])
         if val_data is not None:
             val_data.loc[:,var_cols] = scaler.transform(val_data.loc[:,var_cols])
-        if test_data is not None:
-            test_data.loc[:,var_cols] = scaler.transform(test_data.loc[:,var_cols])
     if log_transform:
         log_transformer = LogTransformer()
         train_data.loc[:,var_cols] = log_transformer.fit_transform(train_data.loc[:,var_cols])
         if val_data is not None:
             val_data.loc[:,var_cols] = log_transformer.transform(val_data.loc[:,var_cols])
-        if test_data is not None:
-            test_data.loc[:,var_cols] = log_transformer.transform(test_data.loc[:,var_cols])
-    return train_data, val_data, test_data
-
+    return train_data, val_data
 
 def read_preprocess_data(args, data=None):
     '''
-    Read data from file, apply preprocessing, and generate data splits (train_data, val_data, test_data).
+    Read data from file, split data and apply preprocessing to data.
+    Note that there is no need to add noise and apply transformations to test_data.
 
     Args:
         args: Configuration namespace containing preprocessing and splitting parameters
-        data (Optional): Pre-loaded data. If None, data will be loaded from file.
+        data (Optional): Pre-loaded data. If None, data will be loaded from file. Defaults to None.
     
-    Yields:
-        Processed data splits based on specified configuration.
+    Returns:
+        For CV, returns a list of tuples, each containing (train_data, val_data) for each fold, after transformations.
+        Otherwise, returns processed train_data and val_data based on specified configuration.
     '''
     if data is None:
         data = read_data(args.train_fp, args.drop_vars)
+    if 0 < args.test_ratio < 1:
+        data, test_data = gen_loo_data(data,args.test_ratio)
     if args.add_noise:
         data = add_noise(data,args.noise_type,args.noise_param)
 
-    if 0 < args.test_ratio < 1:
-        data, test_data = gen_loo_data(data,args.test_ratio)
-    else:
-        test_data = None
     if args.k_fold > 0:
-        for train_data, val_data in gen_cv_data(data,args.k_fold):
-            yield apply_transformations((train_data, val_data, None), args.scaler_type, args.log_transform)
+        return [
+            apply_transformations(train_data, val_data, args.scaler_type, args.log_transform)
+            for train_data, val_data in gen_cv_data(data,args.k_fold)
+        ]
     else:
         if 0 < args.val_ratio < 1:
             train_data, val_data = gen_loo_data(data,args.val_ratio/(1-args.test_ratio))
         else:
             train_data = data
             val_data = None
-        yield apply_transformations((train_data, val_data, test_data), args.scaler_type, args.log_transform)
+        return apply_transformations(train_data, val_data, args.scaler_type, args.log_transform)
 
+def apply_transformations_NoiseAfterScale(data_split, args):
+    train_data, val_data = data_split
+    var_cols = [col for col in train_data.columns if col not in ('UUT','time','label')]
+    if args.scaler_type is not None:
+        scaler = select_scaler_by_type(args.scaler_type)
+        train_data.loc[:,var_cols] = scaler.fit_transform(train_data.loc[:,var_cols])
+        if val_data is not None:
+            val_data.loc[:,var_cols] = scaler.transform(val_data.loc[:,var_cols])
+    if args.add_noise:
+        train_data = add_noise(train_data,args.noise_type,args.noise_param)
+        if val_data is not None:
+            val_data =  add_noise(val_data,args.noise_type,args.noise_param)
+    if args.log_transform:
+        log_transformer = LogTransformer()
+        train_data.loc[:,var_cols] = log_transformer.fit_transform(train_data.loc[:,var_cols])
+        if val_data is not None:
+            val_data.loc[:,var_cols] = log_transformer.transform(val_data.loc[:,var_cols])
+    return train_data, val_data
 
 def read_preprocess_data_NoiseAfterScale(args,data=None):
     if data is None:
         data = read_data(args.train_fp, args.drop_vars)
     if 0 < args.test_ratio < 1:
         data, test_data = gen_loo_data(data,args.test_ratio)
-    else:
-        test_data = None
     if args.k_fold > 0:
-        for train_data, val_data in gen_cv_data(data,args.k_fold):
-            if args.scaler_type is not None:
-                scaler = select_scaler_by_type(args.scaler_type)
-                train_data.iloc[:,2:] = scaler.fit_transform(train_data.iloc[:,2:])
-                val_data.iloc[:,2:] = scaler.transform(val_data.iloc[:,2:])
-            if args.add_noise:
-                train_data = add_noise(train_data,args.noise_type,args.noise_param)
-                val_data =  add_noise(val_data,args.noise_type,args.noise_param)
-            if args.log_transform:
-                log_transformer = LogTransformer()
-                train_data.iloc[:,2:] = log_transformer.fit_transform(train_data.iloc[:,2:])
-                val_data.iloc[:,2:] = log_transformer.transform(val_data.iloc[:,2:])
-            yield train_data, val_data, None
+        return [
+            apply_transformations_NoiseAfterScale((train_data, val_data), args) 
+            for train_data, val_data in gen_cv_data(data,args.k_fold)
+        ]
     else:
         if 0 < args.val_ratio < 1:
             train_data, val_data = gen_loo_data(data,args.val_ratio/(1-args.test_ratio))
         else:
             train_data = data
             val_data = None
-        if args.scaler_type is not None:
-            scaler = select_scaler_by_type(args.scaler_type)
-            train_data.iloc[:,2:] = scaler.fit_transform(train_data.iloc[:,2:])
-            if val_data is not None:
-                val_data.iloc[:,2:] = scaler.transform(val_data.iloc[:,2:])
-            if test_data is not None:
-                test_data.iloc[:,2:] = scaler.transform(test_data.iloc[:,2:])
-        if args.add_noise:
-            train_data = add_noise(train_data,args.noise_type,args.noise_param)
-            if val_data is not None:
-                val_data =  add_noise(val_data,args.noise_type,args.noise_param)
-            if test_data is not None:
-                test_data = add_noise(test_data,args.noise_type,args.noise_param)   
-        if args.log_transform:
-            log_transformer = LogTransformer()
-            train_data.iloc[:,2:] = log_transformer.fit_transform(train_data.iloc[:,2:])
-            if val_data is not None:
-                val_data.iloc[:,2:] = log_transformer.transform(val_data.iloc[:,2:])
-            if test_data is not None:
-                test_data.iloc[:,2:] = log_transformer.transform(test_data.iloc[:,2:])
-        yield train_data, val_data, test_data
+        return apply_transformations_NoiseAfterScale((train_data, val_data), args)
