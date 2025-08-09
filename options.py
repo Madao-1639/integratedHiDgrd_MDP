@@ -28,6 +28,7 @@ def parse_common_args(parser):
 
     # Dataset setting
     parser.add_argument('--data_type', type=str, default='Base', choices=['Base','TW','RTF','RTFTW'], help='"TW" for Time Window dataset, "RTF" for Run-To-Failure dataset')
+    parser.add_argument('--pos_label', type=int, default=1, help='Positive label for classification task')
     parser.add_argument('-N', type=int, default=0, help='Output N+1 consecutive samples')
     parser.add_argument('--window_width', type=int, default=15, help='Window width for TWDataset')
 

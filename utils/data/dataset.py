@@ -1,5 +1,4 @@
 from torch.utils.data import Dataset,IterableDataset
-import torch
 
 class BaseDataset(Dataset):
     def __init__(self, data, train, args):
@@ -11,6 +10,7 @@ class BaseDataset(Dataset):
         self.var_columns = self.data.columns[2:]
 
         self.task = args.task
+        self.pos_label = args.pos_label
         self.get_label()
 
         grouped = self.data.groupby('UUT')
@@ -22,7 +22,7 @@ class BaseDataset(Dataset):
     def get_label(self):
         end_time = self.data.groupby('UUT')['time'].transform('max')
         if self.task == 'cls':
-            self.data = self.data.assign(label=(self.data['time']>=end_time).astype(int))
+            self.data = self.data.assign(label=(self.data['time']>end_time-self.pos_label).astype(int))
         else:
             self.data = self.data.assign(label = end_time-self.data['time']+1)
 
@@ -162,6 +162,7 @@ class RTFDataset(IterableDataset):
         self.var_columns = self.data.columns[2:]
 
         self.task = args.task
+        self.pos_label = args.pos_label
         self.get_label()
 
         grouped = self.data.groupby('UUT')
@@ -171,7 +172,7 @@ class RTFDataset(IterableDataset):
     def get_label(self):
         end_time = self.data.groupby('UUT')['time'].transform('max')
         if self.task == 'cls':
-            self.data = self.data.assign(label=(self.data['time']>=end_time).astype(int))
+            self.data = self.data.assign(label=(self.data['time']>end_time-self.pos_label).astype(int))
         else:
             self.data = self.data.assign(label = end_time-self.data['time']+1)
 
@@ -197,6 +198,6 @@ class RTFTWDataset(RTFDataset):
             data = []
             end_time = self.ls_dict[UUT]
             for window_time in range(self.window_width,end_time+1):
-                window_data = grouped_data.iloc[window_time-self.window_width:window_time,2:-1].values
+                window_data = grouped_data.loc[window_time-self.window_width:window_time,self.var_columns].values
                 data.append(window_data)
             yield UUT, t, data, y
