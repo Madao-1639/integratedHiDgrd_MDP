@@ -7,6 +7,7 @@ import pandas as pd
 # from sklearn.metrics import confusion_matrix, recall_score, precision_score, f1_score
 from sklearn.metrics import precision_recall_fscore_support
 
+from torch.utils.data import DataLoader
 from utils.data import select_loader
 from model import BaseRTF, BaseTW, SC_DNN, Integrated_DNN_LSTM, MSRTF#, MSTW
 from loss import FocalLoss,MVFLoss,MONLoss,CONLoss
@@ -18,7 +19,10 @@ from utils.utils import test4norm, plot_hi
 from abc import ABC, abstractmethod
 class BaseTrainer(ABC):
     """Base class for trainers."""
-    def __init__(self,args,train_data: "pd.DataFrame",val_data: "pd.DataFrame" =None, **logger_kwargs) -> None:
+    def __init__(self, args,
+                 train_data: pd.DataFrame = None, val_data: pd.DataFrame = None,
+                 train_loader: DataLoader = None, val_loader: DataLoader = None,
+                 **logger_kwargs) -> None:
         self.args = args
         if args.logger:
             self.logger = Logger(args,**logger_kwargs)
@@ -29,17 +33,21 @@ class BaseTrainer(ABC):
         else:
             self.device = torch.device("cpu")
         print(f'Training on {self.device}')
-        self.get_loader(train_data,val_data)
+        self.get_loader(train_data,val_data,train_loader,val_loader)
         self.get_model()
         self.get_optimizer()
 
         self.get_loss_wa_coef()
 
-    def get_loader(self,train_data: "pd.DataFrame", val_data: "pd.DataFrame") -> None:
-        self.train_loader = select_loader(train_data,True,self.args)
+    def get_loader(self,
+                   train_data: "pd.DataFrame", val_data: "pd.DataFrame",
+                   train_loader: DataLoader, val_loader: DataLoader) -> None:
+        self.train_loader = select_loader(train_data,True,self.args) if train_loader is None else train_loader
         self.ls_dict = self.train_loader.dataset.ls_dict
 
-        if val_data is not None:
+        if val_loader is not None:
+            self.val_loader = val_loader
+        elif val_data is not None:
             self.val_loader = select_loader(val_data,False,self.args)
         else:
             self.val_loader = None

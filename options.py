@@ -34,14 +34,12 @@ def parse_common_args(parser):
 
     # I/O
     parser.add_argument('--load_model_fp', type=str, help='Model path for pretrain or test')
-    parser.add_argument('--test_ratio', type=float, default=0)
     parser.add_argument('--no_logger', action='store_false', dest='logger', default=True, help='Do not keep log')
     parser.add_argument('--log_path', type=str, default='log')
     parser.add_argument('--save_suffix', type=str, help='Comment for model')
     parser.add_argument('--record_HI', type=str, choices = [None,'train','val','all'])
     parser.add_argument('--record_UUTs', type=int, nargs='*')
     parser.add_argument('--record_num_UUTs', type=int, default=5)
-    parser.add_argument('--result_dir', type=str, default='result')
     parser.add_argument('--use_cuda', action='store_true')
     parser.add_argument('--seed', type=int, default=42)
     return parser
@@ -51,6 +49,7 @@ def parse_train_args(parser):
     parser.add_argument('--train_fp', type=str, default='data/train_FD001.txt')
     parser.add_argument('--k_fold', type=int, default=5)
     parser.add_argument('--val_ratio', type=float, default=0.2)
+    parser.add_argument('--test_ratio', type=float, default=0)
     parser.add_argument('--record_freq', type=int, default=5)
     parser.add_argument('--batch_size', type=int, default=64)
     parser.add_argument('--num_workers', type=int, default=4)
@@ -80,6 +79,7 @@ def parse_train_args(parser):
 
 def parse_test_args(parser):
     parser.add_argument('--test_fp', type=str, default='data/test_FD001.txt',)
+    parser.add_argument('--result_dir', type=str, default='result')
     return parser
 
 
@@ -108,10 +108,6 @@ def preprocess_common_args(args):
     args.time_str = time.strftime(r"%Y%m%d-%H%M%S", time.localtime())
     args.input_size = 21 - len(args.drop_vars) if args.drop_vars else 21
 
-    if not os.path.exists(args.result_dir):
-        os.mkdir(args.result_dir)
-        args.result_dir = os.path.join(args.result_dir, args.model_name + '_' + args.time_str)
-
 def preprocess_train_args(args):
     if not os.path.exists('checkpoint'):
         os.mkdir('checkpoint')
@@ -120,6 +116,10 @@ def preprocess_train_args(args):
         os.mkdir(checkpoint_path)
     args.checkpoint_path = checkpoint_path
 
+def preprocess_test_args(args):
+    if not os.path.exists(args.result_dir):
+        os.mkdir(args.result_dir)
+        args.result_dir = os.path.join(args.result_dir, args.model_name + '_' + args.time_str)
 
 
 def save_args(args, save_dir):
@@ -139,6 +139,6 @@ def prepare_train_args():
 def prepare_test_args():
     args = get_test_args()
     preprocess_common_args(args)
-    # preprocess_test_args(args)
+    preprocess_test_args(args)
     save_args(args, args.result_dir)
     return args
