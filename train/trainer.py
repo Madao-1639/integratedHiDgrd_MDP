@@ -200,9 +200,7 @@ class BaseRTFTrainer(BaseTrainer):
             self.optimizer.zero_grad()
             total_loss.backward()
             self.optimizer.step()
-
-            # Constrain sigma_square to be big enough
-            self.model.sigma_square.data.clamp_(0.1)
+            self.constrain_parameters()
 
             # Logger record loss
             if self.logger:
@@ -251,6 +249,10 @@ class BaseRTFTrainer(BaseTrainer):
         }
         return loss
 
+    def constrain_parameters(self):
+        # Constrain sigma_square to be big enough
+        self.model.sigma_square.data.clamp_(min=0.1)
+
 
 
 class BaseTWTrainer(BaseRTFTrainer):
@@ -289,6 +291,7 @@ class BaseTWTrainer(BaseRTFTrainer):
             self.optimizer.zero_grad()
             total_loss.backward()
             self.optimizer.step()
+            self.constrain_parameters()
 
             if self.logger:
                 for k,v in loss.items():
@@ -502,3 +505,8 @@ class MSRTFTrainer(BaseRTFTrainer):
                 self.logger.writer.add_figure(f'deg_HI/{self.args.record_HI}',deg_hi_fig,epoch)
 
         return hi_dict, deg_hi_dict
+
+    # def constrain_parameters(self):
+    #     super().constrain_parameters()
+    #     self.model.hi_transformer.c1.data.clamp_(max=11)
+    #     self.model.hi_transformer.c2.data.clamp_(max=0.1)

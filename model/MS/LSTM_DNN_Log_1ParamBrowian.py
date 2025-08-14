@@ -7,7 +7,7 @@ from loss import _loss_reduction
 
 class LLT(nn.Module):
     '''Learnable Logarithm Transformer'''
-    def __init__(self,c1=7.9,c2=-0.05,_delta=1e-7):
+    def __init__(self,c1=10.5,c2=-0.5,_delta=1e-7):
         super().__init__()
         self.c1 = nn.Parameter(torch.FloatTensor([c1]))
         # self.c1 = 8.2
