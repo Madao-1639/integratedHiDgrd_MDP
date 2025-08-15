@@ -107,26 +107,29 @@ def select_scaler_by_type(scaler_type = 'Standard'):
     elif scaler_type == 'MinMax':
         return MinMaxScaler()
 
-def apply_transformations(train_data, val_data=None, scaler_type = 'Standard', log_transform = False):
+def apply_transformations(args, train_data, val_data=None):
     '''
     Apply scaling and logarithmic transformation to train_data and val_data.
 
     Args:
+        args: Namespace or object containing transformation parameters
         train_data (pd.DataFrame): The training dataset containing features and possibly labels.
         val_data (pd.DataFrame, optional): The validation dataset to be transformed using the same scaler/transformer as train_data. Defaults to None.
-        scaler_type (str, optional): The type of scaler to use for feature scaling (e.g., 'Standard', 'MinMax'). If None, no scaling is applied. Defaults to 'Standard'.
-        log_transform (bool, optional): Whether to apply a logarithmic transformation to the features after scaling. Defaults to False.
 
     Returns:
         tuple: Transformed train_data and val_data.
     '''
+    if args.add_noise:
+        train_data = add_noise(train_data, args.noise_type, args.noise_param)
+        if val_data is not None:
+            val_data = add_noise(val_data, args.noise_type, args.noise_param)
     var_cols = [col for col in train_data.columns if col not in ('UUT','time','label')]
-    if scaler_type is not None:
-        scaler = select_scaler_by_type(scaler_type)
+    if args.scaler_type is not None:
+        scaler = select_scaler_by_type(args.scaler_type)
         train_data.loc[:,var_cols] = scaler.fit_transform(train_data.loc[:,var_cols])
         if val_data is not None:
             val_data.loc[:,var_cols] = scaler.transform(val_data.loc[:,var_cols])
-    if log_transform:
+    if args.log_transform:
         log_transformer = LogTransformer()
         train_data.loc[:,var_cols] = log_transformer.fit_transform(train_data.loc[:,var_cols])
         if val_data is not None:
@@ -136,10 +139,10 @@ def apply_transformations(train_data, val_data=None, scaler_type = 'Standard', l
 def read_preprocess_data(args, data=None):
     '''
     Read data from file, split data and apply preprocessing to data.
-    Note that there is no need to add noise and apply transformations to test_data.
+    Note that there is no need to apply transformations to test_data, and data splitting should be done before transformations to (i) exclude test_data from parameter tuning and (ii) keep consistency of test_data for parameter tuning and testing, due to the randomness involved in noise addition.
 
     Args:
-        args: Configuration namespace containing preprocessing and splitting parameters
+        args: Configuration namespace containing preprocessing and splitting parameters.
         data (Optional): Pre-loaded data. If None, data will be loaded from file. Defaults to None.
     
     Returns:
@@ -150,12 +153,10 @@ def read_preprocess_data(args, data=None):
         data = read_data(args.train_fp, args.drop_vars)
     if 0 < args.test_ratio < 1:
         data, test_data = gen_loo_data(data,args.test_ratio)
-    if args.add_noise:
-        data = add_noise(data,args.noise_type,args.noise_param)
 
     if args.k_fold > 0:
         return [
-            apply_transformations(train_data, val_data, args.scaler_type, args.log_transform)
+            apply_transformations(args, train_data, val_data)
             for train_data, val_data in gen_cv_data(data,args.k_fold)
         ]
     else:
@@ -164,10 +165,9 @@ def read_preprocess_data(args, data=None):
         else:
             train_data = data
             val_data = None
-        return apply_transformations(train_data, val_data, args.scaler_type, args.log_transform)
+        return apply_transformations(args, train_data, val_data)
 
-def apply_transformations_NoiseAfterScale(data_split, args):
-    train_data, val_data = data_split
+def apply_transformations_NoiseAfterScale(args, train_data, val_data = None):
     var_cols = [col for col in train_data.columns if col not in ('UUT','time','label')]
     if args.scaler_type is not None:
         scaler = select_scaler_by_type(args.scaler_type)
@@ -192,7 +192,7 @@ def read_preprocess_data_NoiseAfterScale(args,data=None):
         data, test_data = gen_loo_data(data,args.test_ratio)
     if args.k_fold > 0:
         return [
-            apply_transformations_NoiseAfterScale((train_data, val_data), args) 
+            apply_transformations_NoiseAfterScale(args, train_data, val_data) 
             for train_data, val_data in gen_cv_data(data,args.k_fold)
         ]
     else:
@@ -201,4 +201,4 @@ def read_preprocess_data_NoiseAfterScale(args,data=None):
         else:
             train_data = data
             val_data = None
-        return apply_transformations_NoiseAfterScale((train_data, val_data), args)
+        return apply_transformations_NoiseAfterScale(args, train_data, val_data)
