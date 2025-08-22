@@ -24,7 +24,7 @@ class MSRTF(BaseRTF):
         self.fix_point = args.MS_fix_point
         self.drop_first = args.MS_drop_first
         self.get_flex_coef = select_flex_coef(args.MS_flex_type)
-        self.hi_transformer = LLT()
+        self.hi_transformer = LLT(c1=args.MS_LLT_c1,c2=args.MS_LLT_c2)
 
     def mfe_loss(self,x,UUT, reduction = 'mean'):
         if self.fix_point is not None:

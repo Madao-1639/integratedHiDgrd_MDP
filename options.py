@@ -14,6 +14,8 @@ def parse_common_args(parser):
     parser.add_argument('--activate', type=str, default='SigmoidExpBias', choices=['Sigmoid','SigmoidExpBias','SigmoidLinear','SigmoidLeakyReLU','SigmoidELU'])
     parser.add_argument('--cls_thres', type=float, default=0.5)
         # Multi-Stage
+    parser.add_argument('--MS_LLT_c1', type=float, default=8.2, help='Initial shift value of LLT')
+    parser.add_argument('--MS_LLT_c2', type=float, default=0, help='Initial bias value of LLT')
     parser.add_argument('--MS_fix_point', type=int, help='Fix turning point')
     parser.add_argument('--MS_flex_type', type=str, choices=[None,'SReLU','LSReLU','SLSReLU'], help='Flexible MFE loss coefficient type')
     parser.add_argument('--MS_drop_first', type=int, default=10, help='Drop first N samples in MFE loss calculation')
