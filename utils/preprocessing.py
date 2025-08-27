@@ -150,7 +150,7 @@ def read_preprocess_data(args, data=None):
         Otherwise, returns processed train_data and val_data based on specified configuration.
     '''
     if data is None:
-        data = read_data(args.train_fp, args.drop_vars)
+        data = read_data(args.data_fp, args.drop_vars)
     if 0 < args.test_ratio < 1:
         data, test_data = gen_loo_data(data,args.test_ratio)
 
@@ -187,7 +187,7 @@ def apply_transformations_NoiseAfterScale(args, train_data, val_data = None):
 
 def read_preprocess_data_NoiseAfterScale(args,data=None):
     if data is None:
-        data = read_data(args.train_fp, args.drop_vars)
+        data = read_data(args.data_fp, args.drop_vars)
     if 0 < args.test_ratio < 1:
         data, test_data = gen_loo_data(data,args.test_ratio)
     if args.k_fold > 0:

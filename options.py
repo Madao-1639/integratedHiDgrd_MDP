@@ -11,7 +11,7 @@ def parse_common_args(parser):
     parser.add_argument('--num_lstm_layers', type=int, default=1)
     parser.add_argument('--lstm_dropout', type=float, default=0.0)
     parser.add_argument('--dnn_hidden_sizes', nargs='+', type=int, default=[16])
-    parser.add_argument('--activate', type=str, default='SigmoidExpBias', choices=['Sigmoid','SigmoidExpBias','SigmoidLinear','SigmoidLeakyReLU','SigmoidELU'])
+    parser.add_argument('--activate', type=str, default='Sigmoid', choices=['Sigmoid','SigmoidExpBias','SigmoidLinear','SigmoidLeakyReLU','SigmoidELU'])
     parser.add_argument('--cls_thres', type=float, default=0.5)
         # Multi-Stage
     parser.add_argument('--MS_LLT_c1', type=float, default=8.2, help='Initial shift value of LLT')
@@ -21,23 +21,30 @@ def parse_common_args(parser):
     parser.add_argument('--MS_drop_first', type=int, default=10, help='Drop first N samples in MFE loss calculation')
 
     # Data Preprocessing
+    parser.add_argument('--data_fp', type=str, default='data/train_FD001.txt')
     parser.add_argument('--drop_vars', nargs='*', type=int, default=[1,5,6,10,16,18,19], help='Drop duplicate variables')
-    parser.add_argument('--scaler_type', type=str, default='Standard', choices=[None,'Standard','MinMax'],)
-    parser.add_argument('--log_transform', action='store_true', help='Perform logarithm transformation when preprocessing data')
+        # Data Split
+    parser.add_argument('--k_fold', type=int, default=5)
+    parser.add_argument('--val_ratio', type=float, default=0.2)
+    parser.add_argument('--test_ratio', type=float, default=0)
+        # Data Transformation
     parser.add_argument('--add_noise', action='store_true')
     parser.add_argument('--noise_type', type=str, default='gaussian', choices=['gaussian','white gaussian'])
     parser.add_argument('--noise_param', type=float, default=0.1, help='std in gaussian, snr in white gaussian')
+    parser.add_argument('--scaler_type', type=str, default='Standard', choices=[None,'Standard','MinMax'],)
+    parser.add_argument('--log_transform', action='store_true', help='Perform logarithm transformation when preprocessing data')
 
     # Dataset setting
     parser.add_argument('--data_type', type=str, default='Base', choices=['Base','TW','RTF','RTFTW'], help='"TW" for Time Window dataset, "RTF" for Run-To-Failure dataset')
     parser.add_argument('--pos_label', type=int, default=1, help='Positive label for classification task')
     parser.add_argument('-N', type=int, default=0, help='Output N+1 consecutive samples')
     parser.add_argument('--window_width', type=int, default=15, help='Window width for TWDataset')
+    # Dataloader setting
+    parser.add_argument('--batch_size', type=int, default=64)
+    parser.add_argument('--num_workers', type=int, default=4)
 
     # I/O
     parser.add_argument('--load_model_fp', type=str, help='Model path for pretrain or test')
-    parser.add_argument('--no_logger', action='store_false', dest='logger', default=True, help='Do not keep log')
-    parser.add_argument('--log_path', type=str, default='log')
     parser.add_argument('--save_suffix', type=str, help='Comment for model')
     parser.add_argument('--record_HI', type=str, choices = [None,'train','val','all'])
     parser.add_argument('--record_UUTs', type=int, nargs='*')
@@ -48,13 +55,7 @@ def parse_common_args(parser):
 
 
 def parse_train_args(parser):
-    parser.add_argument('--train_fp', type=str, default='data/train_FD001.txt')
-    parser.add_argument('--k_fold', type=int, default=5)
-    parser.add_argument('--val_ratio', type=float, default=0.2)
-    parser.add_argument('--test_ratio', type=float, default=0)
     parser.add_argument('--record_freq', type=int, default=5)
-    parser.add_argument('--batch_size', type=int, default=64)
-    parser.add_argument('--num_workers', type=int, default=4)
     parser.add_argument('--num_epoch', type=int, default=200)
     parser.add_argument('--print_freq', type=int, default=10)
 
@@ -77,11 +78,14 @@ def parse_train_args(parser):
     parser.add_argument('--MVFLoss_m', type=float, default=1.0)
     parser.add_argument('--MONLoss_c', type=float, default=0.0)
     parser.add_argument('--CONLoss_c', type=float, default=0.0)
+
+    # I/O
+    parser.add_argument('--no_logger', action='store_false', dest='logger', default=True, help='Do not keep log')
+    parser.add_argument('--log_path', type=str, default='log')
     return parser
 
 def parse_test_args(parser):
     parser.add_argument('--test_fp', type=str, default='data/test_FD001.txt',)
-    parser.add_argument('--result_dir', type=str, default='result')
     return parser
 
 
@@ -119,9 +123,12 @@ def preprocess_train_args(args):
     args.checkpoint_path = checkpoint_path
 
 def preprocess_test_args(args):
-    if not os.path.exists(args.result_dir):
-        os.mkdir(args.result_dir)
-        args.result_dir = os.path.join(args.result_dir, args.model_name + '_' + args.time_str)
+    if not os.path.exists('checkpoint'):
+        os.mkdir('checkpoint')
+    result_dir = os.path.join('checkpoint',args.model_name)
+    if not os.path.exists(result_dir):
+        os.mkdir(result_dir)
+    args.result_dir = result_dir
 
 
 def save_args(args, save_dir):

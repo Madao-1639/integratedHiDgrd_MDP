@@ -82,7 +82,7 @@ study = optuna.create_study(
     # pruner=optuna.pruners.MedianPruner(),
     load_if_exists=True,
 )
-data = read_data(args.train_fp, args.drop_vars)
+data = read_data(args.data_fp, args.drop_vars)
 if 0 < args.test_ratio < 1:
     data, test_data = gen_loo_data(data,args.test_ratio)
     args.test_ratio = 0
