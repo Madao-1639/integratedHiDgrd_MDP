@@ -2,6 +2,7 @@ import os
 from collections import defaultdict
 import torch
 from torch.utils.tensorboard import SummaryWriter
+import pickle
 
 class Logger:
     def __init__(self, args, log_name: "str" = None, comment: "str" = None, **writer_kwargs):
@@ -55,9 +56,14 @@ class Logger:
         self.save_histogram(global_step,)
 
     def save_checkpoint(self, model, epoch, step=0):
-        checkpoint_name = f'{epoch:03d}_{step:05d}.pth'
-        model_fp = os.path.join(self.checkpoint_path, checkpoint_name)
-        torch.save(model.state_dict(), model_fp)
+        checkpoint_name = f'{epoch:03d}_{step:05d}'
+        network_fp = os.path.join(self.checkpoint_path, checkpoint_name+'.pth')
+        # Save network
+        torch.save(model.state_dict(), network_fp)
+        # Save classifier if exists (for Integrated & SC models)
+        if hasattr(model,'cls_model'):
+            with open(os.path.join(self.checkpoint_path, checkpoint_name+'.pkl'),'wb') as classifier_fp:
+                pickle.dump(model.cls_model, classifier_fp)
 
     def __exit__(self):
         self.writer.close()

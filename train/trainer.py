@@ -1,3 +1,6 @@
+import os
+import pickle
+
 import torch
 from torch import nn
 from torch.optim import Adam
@@ -20,8 +23,8 @@ from abc import ABC, abstractmethod
 class BaseTrainer(ABC):
     """Base class for trainers."""
     def __init__(self, args,
-                 train_data: pd.DataFrame = None, val_data: pd.DataFrame = None,
-                 train_loader: DataLoader = None, val_loader: DataLoader = None,
+                train_data: pd.DataFrame = None, val_data: pd.DataFrame = None,
+                train_loader: DataLoader = None, val_loader: DataLoader = None,
                  **logger_kwargs) -> None:
         self.args = args
         if args.logger:
@@ -40,8 +43,8 @@ class BaseTrainer(ABC):
         self.get_loss_wa_coef()
 
     def get_loader(self,
-                   train_data: "pd.DataFrame", val_data: "pd.DataFrame",
-                   train_loader: DataLoader, val_loader: DataLoader) -> None:
+                train_data: "pd.DataFrame", val_data: "pd.DataFrame",
+                train_loader: DataLoader, val_loader: DataLoader) -> None:
         self.train_loader = select_loader(train_data,True,self.args) if train_loader is None else train_loader
         self.ls_dict = self.train_loader.dataset.ls_dict
 
@@ -69,7 +72,7 @@ class BaseTrainer(ABC):
                 # Sample/Select UUTs to plot HI
                 data_record_UUTs = record_HI_data['UUT'].unique()
                 args_record_UUTs = self.args.record_UUTs
-                if args_record_UUTs and all((data_record_UUTs==UUT).any() for UUT in args_record_UUTs):
+                if args_record_UUTs and all(UUT in data_record_UUTs for UUT in args_record_UUTs):
                     self.record_UUTs = args_record_UUTs
                 else:
                     record_num_UUTs = min(data_record_UUTs.size,self.args.record_num_UUTs)
@@ -79,7 +82,26 @@ class BaseTrainer(ABC):
 
     @abstractmethod
     def get_model(self) -> None:
-        raise NotImplementedError
+        """
+        Loads model if `load_model_fp` is provided, 
+        and moves the model to the configured device.
+        This method should be called in the subclass after defining `self.model`.
+        """
+        if self.args.load_model_fp:
+            # Parse file paths
+            network_fp = self.args.load_model_fp
+            if network_fp.endswith('.pth'):
+                classifier_fp = network_fp[:-4]+'.pkl'
+            else:
+                classifier_fp = network_fp+'.pkl'
+                network_fp = network_fp+'.pth'
+            # Load network
+            self.model.load_state_dict(torch.load(network_fp, weights_only=False),strict=False)
+            # Load classifier if exists (for Integrated & SC models)
+            if os.path.exists(classifier_fp):
+                with open(classifier_fp,'rb') as classifier_f:
+                    self.model.cls_model = pickle.load(classifier_f)
+        self.model.to(self.device)
 
     def get_optimizer(self) -> None:
         no_decay_pg, decay_pg = [], []
@@ -123,7 +145,7 @@ class BaseTrainer(ABC):
 
     @abstractmethod
     def train_per_epoch(self,epoch: "int"):
-        raise NotImplementedError
+        pass
 
     def val_per_epoch(self,epoch: "int") -> dict:
         self.model.eval()
@@ -174,11 +196,9 @@ class BaseRTFTrainer(BaseTrainer):
 
     def get_model(self):
         self.model = BaseRTF(self.args, self.ls_dict.index)
-        if self.args.load_model_fp:
-            self.model.load_state_dict(torch.load(self.args.load_model_fp, weights_only=False),strict=False)
-        self.model.to(self.device)
         # example_input = torch.randn((self.args.input_size,20))
         # self.logger.writer.add_graph(self.model,example_input)
+        super().get_model()
 
     def train_per_epoch(self, epoch):
         # Switch to train mode
@@ -260,11 +280,9 @@ class BaseTWTrainer(BaseRTFTrainer):
 
     def get_model(self):
         self.model = BaseTW(self.args, self.ls_dict.index)
-        if self.args.load_model_fp:
-            self.model.load_state_dict(torch.load(self.args.load_model_fp, weights_only=False),strict=False)
-        self.model.to(self.device)
         # example_input = torch.randn((self.args.window_width,self.args.input_size,))
         # self.logger.writer.add_graph(self.model,example_input)
+        super().get_model()
 
     def get_loss_wa_coef(self):
         # Coefficients of Weighted-Average(WA) of loss for each UUT.
@@ -326,11 +344,9 @@ class SCTrainer(BaseTrainer):
 
     def get_model(self):
         self.model = SC_DNN(self.args)
-        if self.args.load_model_fp:
-            self.model.load_state_dict(torch.load(self.args.load_model_fp, weights_only=False),strict=False)
-        self.model.to(self.device)
         # example_input = torch.randn((self.args.input_size,))
         # self.logger.writer.add_graph(self.model,example_input)
+        super().get_model()
 
     def get_loss_wa_coef(self):
         super().get_loss_wa_coef()
@@ -402,11 +418,9 @@ class IntegratedTrainer(BaseTrainer):
 
     def get_model(self):
         self.model = Integrated_DNN_LSTM(self.args, self.ls_dict.index)
-        if self.args.load_model_fp:
-            self.model.load_state_dict(torch.load(self.args.load_model_fp, weights_only=False),strict=False)
-        self.model.to(self.device)
         # example_input = torch.randn((self.args.input_size,20))
         # self.logger.writer.add_graph(self.model,example_input)
+        super().get_model()
 
     def train_per_epoch(self, epoch):
         self.model.train()
@@ -464,11 +478,9 @@ class MSRTFTrainer(BaseRTFTrainer):
 
     def get_model(self):
         self.model = MSRTF(args=self.args, train_UUTs=self.ls_dict.index)
-        if self.args.load_model_fp:
-            self.model.load_state_dict(torch.load(self.args.load_model_fp, weights_only=False),strict=False)
-        self.model.to(self.device)
         # example_input = torch.randn((self.args.input_size,20))
         # self.logger.writer.add_graph(self.model,example_input)
+        super().get_model()
 
     def record_per_epoch(self,epoch):
         self.model.eval()

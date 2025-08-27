@@ -1,7 +1,2 @@
-from .trainer import (
-    BaseTWTrainer,
-    SCTrainer,
-)
-
 from .trainer_entry import select_trainer_by_type,get_trainer
 from .trainer_entry import get_trainer_NoiseAfterScale
