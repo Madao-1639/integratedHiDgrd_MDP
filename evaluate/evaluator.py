@@ -42,15 +42,6 @@ class BaseEvaluator(ABC):
             else:
                 record_HI_data_type = 'RTF'
             self.record_HI_loader = select_loader(record_HI_data,False,self.args,record_HI_data_type)
-
-            # Sample/Select UUTs to plot HI
-            data_record_UUTs = record_HI_data['UUT'].unique()
-            args_record_UUTs = self.args.record_UUTs
-            if args_record_UUTs and all(UUT in data_record_UUTs for UUT in args_record_UUTs):
-                self.record_UUTs = args_record_UUTs
-            else:
-                record_num_UUTs = min(data_record_UUTs.size,self.args.record_num_UUTs)
-                self.record_UUTs = np.random.choice(data_record_UUTs,size=record_num_UUTs,replace=False)
         else:
             self.record_HI_loader = None
 
@@ -103,10 +94,9 @@ class BaseEvaluator(ABC):
         # Record HI
         hi_dict = {}
         for UUT,t,X,y_true in self.record_HI_loader:
-            if UUT in self.record_UUTs:
-                X = X.to(self.device)
-                hi = self.model(X).detach().numpy()
-                hi_dict[UUT] = hi
+            X = X.to(self.device)
+            hi = self.model(X).detach().numpy()
+            hi_dict[UUT] = hi
         return hi_dict
 
 
@@ -181,9 +171,9 @@ class MSRTFEvaluator(BaseRTFEvaluator):
         # example_input = torch.randn((self.args.input_size,20))
         # self.logger.writer.add_graph(self.model,example_input)
         del self.model.theta_train
-        super().get_model()
+        super(BaseRTFEvaluator,self).get_model()
 
-    def record_per_epoch(self,epoch):
+    def record(self):
         self.model.eval()
 
         # Record HI
@@ -197,6 +187,5 @@ class MSRTFEvaluator(BaseRTFEvaluator):
 
         # Test for normality
         nt_summary = test4norm(deg_hi_dict,sig_list=(0.01,0.05,0.10))
-        for test_name, test_result in nt_summary.items():
-            self.logger.writer.add_scalar(f'NomalTest/{self.args.record_HI}_{test_name}',test_result,epoch)
+
         return hi_dict, deg_hi_dict, nt_summary

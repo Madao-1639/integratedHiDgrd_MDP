@@ -47,8 +47,6 @@ def parse_common_args(parser):
     parser.add_argument('--load_model_fp', type=str, help='Model path for pretrain or test')
     parser.add_argument('--save_suffix', type=str, help='Comment for model')
     parser.add_argument('--record_HI', type=str, choices = [None,'train','val','all'])
-    parser.add_argument('--record_UUTs', type=int, nargs='*')
-    parser.add_argument('--record_num_UUTs', type=int, default=5)
     parser.add_argument('--use_cuda', action='store_true')
     parser.add_argument('--seed', type=int, default=42)
     return parser
@@ -56,6 +54,8 @@ def parse_common_args(parser):
 
 def parse_train_args(parser):
     parser.add_argument('--record_freq', type=int, default=5)
+    parser.add_argument('--record_UUTs', type=int, nargs='*')
+    parser.add_argument('--record_num_UUTs', type=int, default=5)
     parser.add_argument('--num_epoch', type=int, default=200)
     parser.add_argument('--print_freq', type=int, default=10)
 

@@ -480,7 +480,7 @@ class MSRTFTrainer(BaseRTFTrainer):
         self.model = MSRTF(args=self.args, train_UUTs=self.ls_dict.index)
         # example_input = torch.randn((self.args.input_size,20))
         # self.logger.writer.add_graph(self.model,example_input)
-        super().get_model()
+        super(BaseRTFTrainer,self).get_model()
 
     def record_per_epoch(self,epoch):
         self.model.eval()
