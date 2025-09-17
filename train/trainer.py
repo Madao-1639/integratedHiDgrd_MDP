@@ -82,26 +82,7 @@ class BaseTrainer(ABC):
 
     @abstractmethod
     def get_model(self) -> None:
-        """
-        Loads model if `load_model_fp` is provided, 
-        and moves the model to the configured device.
-        This method should be called in the subclass after defining `self.model`.
-        """
-        if self.args.load_model_fp:
-            # Parse file paths
-            network_fp = self.args.load_model_fp
-            if network_fp.endswith('.pth'):
-                classifier_fp = network_fp[:-4]+'.pkl'
-            else:
-                classifier_fp = network_fp+'.pkl'
-                network_fp = network_fp+'.pth'
-            # Load network
-            self.model.load_state_dict(torch.load(network_fp, weights_only=False),strict=False)
-            # Load classifier if exists (for Integrated & SC models)
-            if os.path.exists(classifier_fp):
-                with open(classifier_fp,'rb') as classifier_f:
-                    self.model.cls_model = pickle.load(classifier_f)
-        self.model.to(self.device)
+        pass
 
     def get_optimizer(self) -> None:
         no_decay_pg, decay_pg = [], []
@@ -147,6 +128,7 @@ class BaseTrainer(ABC):
     def train_per_epoch(self,epoch: "int"):
         pass
 
+    @torch.no_grad()
     def val_per_epoch(self,epoch: "int") -> dict:
         self.model.eval()
 
@@ -171,6 +153,7 @@ class BaseTrainer(ABC):
                 self.logger.writer.add_scalar(f'Metric/{metric_name}',metric,epoch)
         return metric_result
 
+    @torch.no_grad()
     def record_per_epoch(self,epoch: "int") -> dict:
         self.model.eval()
 
@@ -195,10 +178,12 @@ class BaseRTFTrainer(BaseTrainer):
     '''BaseRTF Model Trainer'''
 
     def get_model(self):
-        self.model = BaseRTF(self.args, self.ls_dict.index)
+        if self.args.load_model_fp:
+            self.model = torch.load(self.args.load_model_fp, map_location=self.device, weights_only=False)
+        else:
+            self.model = BaseRTF(self.args, self.ls_dict.index)
         # example_input = torch.randn((self.args.input_size,20))
         # self.logger.writer.add_graph(self.model,example_input)
-        super().get_model()
 
     def train_per_epoch(self, epoch):
         # Switch to train mode
@@ -207,12 +192,10 @@ class BaseRTFTrainer(BaseTrainer):
         for i, (UUT, t, X, y_true) in enumerate(self.train_loader):
             X = X.to(self.device)
             y_true = y_true.to(self.device)
-
             hi, p = self.model(X)
 
             # Compute loss
             loss = self.compute_loss(hi, p, y_true, UUT)
-
             # Get the item for backward
             total_loss = loss['total_loss']
 
@@ -222,7 +205,10 @@ class BaseRTFTrainer(BaseTrainer):
             self.optimizer.step()
             self.constrain_parameters()
 
-            # Logger record loss
+            # Fit prior distribution
+            self.model.fit_prior_dist()
+
+            # Record loss
             if self.logger:
                 for k,v in loss.items():
                     self.logger.record_scalars('Loss/train', k, v)
@@ -231,6 +217,7 @@ class BaseRTFTrainer(BaseTrainer):
             if (i+1) % self.args.print_freq == 0:
                 print(f'Train: Epoch {epoch} batch {i+1} Loss {total_loss.item():.6f}')
 
+    @torch.no_grad()
     def record_per_epoch(self,epoch):
         self.model.eval()
 
@@ -246,7 +233,7 @@ class BaseRTFTrainer(BaseTrainer):
             self.logger.writer.add_scalar('sigma_square',self.model.sigma_square,epoch)
 
             # Test for normality
-            nt_summary = test4norm(hi_dict,sig_list=(0.01,0.05,0.10))
+            nt_summary = test4norm(hi_dict)
             for test_name, test_result in nt_summary.items():
                 self.logger.writer.add_scalar(f'NomalTest/{self.args.record_HI}_{test_name}',test_result,epoch)
 
@@ -279,10 +266,12 @@ class BaseTWTrainer(BaseRTFTrainer):
     '''BaseTW Model Trainer'''
 
     def get_model(self):
-        self.model = BaseTW(self.args, self.ls_dict.index)
+        if self.args.load_model_fp:
+            self.model = torch.load(self.args.load_model_fp, map_location=self.device, weights_only=False)
+        else:
+            self.model = BaseTW(self.args, self.ls_dict.index)
         # example_input = torch.randn((self.args.window_width,self.args.input_size,))
         # self.logger.writer.add_graph(self.model,example_input)
-        super().get_model()
 
     def get_loss_wa_coef(self):
         # Coefficients of Weighted-Average(WA) of loss for each UUT.
@@ -302,19 +291,26 @@ class BaseTWTrainer(BaseRTFTrainer):
             hi_pre, p_pre = self.model(X_pre)
             hi_cur, p_cur = self.model(X_cur)
 
+            # Compute loss
             loss = self.compute_loss(start, end, hi_pre, hi_cur, p_pre, p_cur, y_pre, y_cur, UUT)
-
+            # Get the item for backward
             total_loss = loss['total_loss']
 
+            # Compute gradient and do Adam step
             self.optimizer.zero_grad()
             total_loss.backward()
             self.optimizer.step()
             self.constrain_parameters()
 
+            # Fit prior distribution
+            self.model.fit_prior_dist()
+
+            # Record loss
             if self.logger:
                 for k,v in loss.items():
                     self.logger.record_scalars('Loss/train', k, v)
 
+            # Monitor training progress
             if (i+1) % self.args.print_freq == 0:
                 print(f'Train: Epoch {epoch} batch {i+1} Loss {total_loss.item():.6f}')
 
@@ -343,10 +339,12 @@ class SCTrainer(BaseTrainer):
     '''SC Model Trainer'''
 
     def get_model(self):
-        self.model = SC_DNN(self.args)
+        if self.args.load_model_fp:
+            self.model = torch.load(self.args.load_model_fp, map_location=self.device, weights_only=False)
+        else:
+            self.model = SC_DNN(self.args)
         # example_input = torch.randn((self.args.input_size,))
         # self.logger.writer.add_graph(self.model,example_input)
-        super().get_model()
 
     def get_loss_wa_coef(self):
         super().get_loss_wa_coef()
@@ -417,10 +415,12 @@ class IntegratedTrainer(BaseTrainer):
     '''Integrated Model Trainer'''
 
     def get_model(self):
-        self.model = Integrated_DNN_LSTM(self.args, self.ls_dict.index)
+        if self.args.load_model_fp:
+            self.model = torch.load(self.args.load_model_fp, map_location=self.device, weights_only=False)
+        else:
+            self.model = Integrated_DNN_LSTM(self.args, self.ls_dict.index)
         # example_input = torch.randn((self.args.input_size,20))
         # self.logger.writer.add_graph(self.model,example_input)
-        super().get_model()
 
     def train_per_epoch(self, epoch):
         self.model.train()
@@ -477,11 +477,14 @@ class MSRTFTrainer(BaseRTFTrainer):
     '''MSRTF Model Trainer'''
 
     def get_model(self):
-        self.model = MSRTF(args=self.args, train_UUTs=self.ls_dict.index)
+        if self.args.load_model_fp:
+            self.model = torch.load(self.args.load_model_fp, map_location=self.device, weights_only=False)
+        else:
+            self.model = MSRTF(args=self.args, train_UUTs=self.ls_dict.index)
         # example_input = torch.randn((self.args.input_size,20))
         # self.logger.writer.add_graph(self.model,example_input)
-        super(BaseRTFTrainer,self).get_model()
 
+    @torch.no_grad()
     def record_per_epoch(self,epoch):
         self.model.eval()
 
@@ -505,7 +508,7 @@ class MSRTFTrainer(BaseRTFTrainer):
                     self.logger.writer.add_scalar(f'{self.args.MS_flex_type}/{param}',value,epoch)
 
             # Test for normality
-            nt_summary = test4norm(deg_hi_dict,sig_list=(0.01,0.05,0.10))
+            nt_summary = test4norm(deg_hi_dict)
             for test_name, test_result in nt_summary.items():
                 self.logger.writer.add_scalar(f'NomalTest/{self.args.record_HI}_{test_name}',test_result,epoch)
 

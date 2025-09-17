@@ -1,5 +1,3 @@
-import os
-import pickle
 import torch
 
 import numpy as np
@@ -7,17 +5,15 @@ import pandas as pd
 from sklearn.metrics import precision_recall_fscore_support
 
 from utils.data import select_loader
-from model import BaseRTF, BaseTW, SC_DNN, Integrated_DNN_LSTM, MSRTF#, MSTW
-from utils.utils import test4norm, plot_hi
+from utils.utils import test4norm
 
 
 
-from abc import ABC, abstractmethod
-class BaseEvaluator(ABC):
+class BaseEvaluator:
     """Base class for evaluators."""
     def __init__(self, args,
                 train_data: pd.DataFrame = None, val_data: pd.DataFrame = None,
-                 **logger_kwargs) -> None:
+                ) -> None:
         self.args = args
         if args.use_cuda and torch.cuda.is_available():
             self.device = torch.device("cuda")
@@ -45,29 +41,10 @@ class BaseEvaluator(ABC):
         else:
             self.record_HI_loader = None
 
-    @abstractmethod
     def get_model(self) -> None:
-        """
-        Loads model if `load_model_fp` is provided, 
-        and moves the model to the configured device.
-        This method should be called in the subclass after defining `self.model`.
-        """
-        if self.args.load_model_fp:
-            # Parse file paths
-            network_fp = self.args.load_model_fp
-            if network_fp.endswith('.pth'):
-                classifier_fp = network_fp[:-4]+'.pkl'
-            else:
-                classifier_fp = network_fp+'.pkl'
-                network_fp = network_fp+'.pth'
-            # Load network
-            self.model.load_state_dict(torch.load(network_fp, weights_only=False),strict=False)
-            # Load classifier if exists (for Integrated & SC models)
-            if os.path.exists(classifier_fp):
-                with open(classifier_fp,'rb') as classifier_f:
-                    self.model.cls_model = pickle.load(classifier_f)
-        self.model.to(self.device)
+        self.model = torch.load(self.args.load_model_fp, map_location=self.device, weights_only=False)
 
+    @torch.no_grad()
     def evaluate(self) -> dict:
         self.model.eval()
 
@@ -89,6 +66,7 @@ class BaseEvaluator(ABC):
         }
         return metric_result
 
+    @torch.no_grad()
     def record(self) -> dict:
         self.model.eval()
         # Record HI
@@ -104,13 +82,7 @@ class BaseEvaluator(ABC):
 class BaseRTFEvaluator(BaseEvaluator):
     '''BaseRTF Model Evaluator'''
 
-    def get_model(self):
-        self.model = BaseRTF(self.args, train_UUTs=[])
-        del self.model.theta_train
-        # example_input = torch.randn((self.args.input_size,20))
-        # self.logger.writer.add_graph(self.model,example_input)
-        super().get_model()
-
+    @torch.no_grad()
     def record(self):
         self.model.eval()
 
@@ -122,57 +94,21 @@ class BaseRTFEvaluator(BaseEvaluator):
             hi_dict[UUT] = hi.detach().numpy()
 
         # Test for normality
-        nt_summary = test4norm(hi_dict,sig_list=(0.01,0.05,0.10))
+        nt_summary = test4norm(hi_dict)
 
         return hi_dict, nt_summary
-
-
-
-class BaseTWEvaluator(BaseRTFEvaluator):
-    '''BaseTW Model Evaluator'''
-
-    def get_model(self):
-        self.model = BaseTW(self.args, train_UUTs=[])
-        # example_input = torch.randn((self.args.window_width,self.args.input_size,))
-        # self.logger.writer.add_graph(self.model,example_input)
-        del self.model.theta_train
-        super().get_model()
-
-
-
-class SCEvaluator(BaseEvaluator):
-    '''SC Model Evaluator'''
-
-    def get_model(self):
-        self.model = SC_DNN(self.args)
-        # example_input = torch.randn((self.args.input_size,))
-        # self.logger.writer.add_graph(self.model,example_input)
-        super().get_model()
-
-
-
-class IntegratedEvaluator(BaseEvaluator):
-    '''Integrated Model Evaluator'''
-
-    def get_model(self):
-        self.model = Integrated_DNN_LSTM(self.args,train_UUTs=[])
-        # example_input = torch.randn((self.args.input_size,20))
-        # self.logger.writer.add_graph(self.model,example_input)
-        del self.model.Gamma_train
-        super().get_model()
 
 
 
 class MSRTFEvaluator(BaseRTFEvaluator):
     '''MSRTF Model Evaluator'''
 
-    def get_model(self):
-        self.model = MSRTF(args=self.args, train_UUTs=[])
-        # example_input = torch.randn((self.args.input_size,20))
-        # self.logger.writer.add_graph(self.model,example_input)
-        del self.model.theta_train
-        super(BaseRTFEvaluator,self).get_model()
+    # def get_model(self):
+    #     self.model = MSRTF(args=self.args, train_UUTs=[])
+    #     del self.model.theta_train
+    #     super(BaseRTFEvaluator,self).get_model()
 
+    @torch.no_grad()
     def record(self):
         self.model.eval()
 
@@ -186,6 +122,6 @@ class MSRTFEvaluator(BaseRTFEvaluator):
             deg_hi_dict[UUT] = self.model.transform_deg_hi(hi).detach().numpy()
 
         # Test for normality
-        nt_summary = test4norm(deg_hi_dict,sig_list=(0.01,0.05,0.10))
+        nt_summary = test4norm(deg_hi_dict)
 
         return hi_dict, deg_hi_dict, nt_summary

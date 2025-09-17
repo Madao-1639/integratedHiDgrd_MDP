@@ -47,6 +47,16 @@ class BaseRTF(nn.Module):
             (x.diff(prepend=torch.FloatTensor([0])) - theta).square()
         return _loss_reduction(loss, reduction)
 
+    @torch.no_grad()
+    def fit_prior_dist(self):
+        self.mu0 = self.theta_train.mean().item()
+        self.sigma0_square = self.theta_train.var().item()
+
+    @torch.no_grad()
+    def update_posterior_dist(self,k,lk):
+        sigma1_square = 1/((1/self.sigma0_square)+(k/self.sigma_square.item()))
+        mu1 = sigma1_square*((self.mu0/self.sigma0_square)+(lk/self.sigma_square.item()))
+        return mu1, sigma1_square
 
 
 class BaseTW(BaseRTF):

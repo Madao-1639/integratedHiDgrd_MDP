@@ -36,7 +36,7 @@ class MSRTF(BaseRTF):
             loss = self.get_flex_coef(x)@super().mfe_loss(self.hi_transformer(x),UUT, reduction='none')
             return _loss_reduction(loss,reduction)
 
-    @torch.no_grad
+    @torch.no_grad()
     def transform_deg_hi(self,hi,_epsilon=0):
         if self.fix_point is not None:
             turning_index = self.fix_point-1

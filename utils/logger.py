@@ -57,13 +57,9 @@ class Logger:
 
     def save_checkpoint(self, model, epoch, step=0):
         checkpoint_name = f'{epoch:03d}_{step:05d}'
-        network_fp = os.path.join(self.checkpoint_path, checkpoint_name+'.pth')
+        model_fp = os.path.join(self.checkpoint_path, checkpoint_name+'.pth')
         # Save network
-        torch.save(model.state_dict(), network_fp)
-        # Save classifier if exists (for Integrated & SC models)
-        if hasattr(model,'cls_model'):
-            with open(os.path.join(self.checkpoint_path, checkpoint_name+'.pkl'),'wb') as classifier_fp:
-                pickle.dump(model.cls_model, classifier_fp)
+        torch.save(model, model_fp)
 
     def __exit__(self):
         self.writer.close()

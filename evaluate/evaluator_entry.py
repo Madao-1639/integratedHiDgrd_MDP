@@ -1,22 +1,14 @@
-from .evaluator import BaseRTFEvaluator,BaseTWEvaluator,SCEvaluator,IntegratedEvaluator,MSRTFEvaluator#,MSTWEvaluator
+from .evaluator import BaseEvaluator,BaseRTFEvaluator,MSRTFEvaluator
 from utils.preprocessing import read_preprocess_data
 from utils.preprocessing import read_preprocess_data_NoiseAfterScale
 
 def select_evaluator_by_type(model_type, data_type=None):
-    if model_type == 'Base':
-        if data_type == 'RTF':
+    if data_type == 'RTF':
+        if model_type == 'Base':
             return BaseRTFEvaluator
-        elif data_type == 'TW':
-            return BaseTWEvaluator
-    elif model_type == 'SC':
-        return SCEvaluator
-    elif model_type == 'Integrated':
-        return IntegratedEvaluator
-    elif model_type == 'MS':
-        if data_type == 'RTF':
+        elif model_type == 'MS':
             return MSRTFEvaluator
-        # elif data_type == 'TW':
-        #     return MSTWEvaluator
+    return BaseEvaluator
 
 def get_evaluator(args,data=None,**evaluator_kwargs):
     '''
