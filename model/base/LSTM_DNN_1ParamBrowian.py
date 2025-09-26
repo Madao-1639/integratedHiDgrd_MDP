@@ -78,7 +78,7 @@ class BaseTW(BaseRTF):
 
     def mfe_loss(self,hi_pre,hi_cur,UUT, reduction = 'none'):
         # Calculate Model Fitting Error(MFE) loss by MLE
-        indice = self._UUT2idx(UUT)
-        theta = self.theta_train[indice]
+        indices = self._UUT2idx(UUT)
+        theta = self.theta_train[indices]
         loss = torch.log(self.sigma_square) + torch.square(hi_cur - hi_pre - theta)/self.sigma_square
         return _loss_reduction(loss,reduction)

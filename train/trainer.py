@@ -315,9 +315,9 @@ class BaseTWTrainer(BaseRTFTrainer):
                 print(f'Train: Epoch {epoch} batch {i+1} Loss {total_loss.item():.6f}')
 
     def compute_loss(self, start, end, hi_pre, hi_cur, p_pre, p_cur, y_pre, y_cur, UUT):
-        indice = self._UUT2idx(UUT)
-        cls_loss_wa_coef = self.cls_loss_wa_coef[indice]
-        mfe_loss_wa_coef = self.mfe_loss_wa_coef[indice]
+        indices = self._UUT2idx(UUT)
+        cls_loss_wa_coef = self.cls_loss_wa_coef[indices]
+        mfe_loss_wa_coef = self.mfe_loss_wa_coef[indices]
 
         cls_loss_start = cls_loss_wa_coef[start]@FocalLoss(p_pre[start], y_pre[start], alpha = self.args.FocalLoss_alpha, gamma = self.args.FocalLoss_gamma, reduction='none')
         cls_loss_cur= cls_loss_wa_coef@FocalLoss(p_cur, y_cur, alpha = self.args.FocalLoss_alpha, gamma = self.args.FocalLoss_gamma, reduction='none')
@@ -389,9 +389,9 @@ class SCTrainer(BaseTrainer):
         self.model.fit(all_hi,all_y)
 
     def compute_loss(self, start, end, hi_ppre, hi_pre, hi_cur, UUT):
-        indice = self._UUT2idx(UUT)
-        mon_loss_wa_coef = self.mon_loss_wa_coef[indice]
-        con_loss_wa_coef = self.con_loss_wa_coef[indice]
+        indices = self._UUT2idx(UUT)
+        mon_loss_wa_coef = self.mon_loss_wa_coef[indices]
+        con_loss_wa_coef = self.con_loss_wa_coef[indices]
 
         mvf_loss = self.args.mvf_loss_weight * MVFLoss(hi_cur[end], self.args.MVFLoss_m, reduction="sum")
 
