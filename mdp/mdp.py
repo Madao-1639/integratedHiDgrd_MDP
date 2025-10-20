@@ -151,7 +151,6 @@ class OR_MDP:
             V, P, R = self.policy_evaluation(policy)
             policy, momentum = self.policy_improvement(policy, V, P, momentum)
             if np.array_equal(policy,policy_pre):
-                print(_+1)
                 break
         return policy, V, P, R
 
@@ -163,15 +162,16 @@ class OR_MDP:
         return V, P, R
 
     def policy_improvement(self, policy, V, P, momentum):
+        rp_cost = self.c1 + self.gamma * V[0]
+        exp_trans_V = P@V
         for k_idx in range(self.k_max - 1):
             direction = momentum[k_idx]
             if direction == 'done':
                 continue
             CL_index = policy[k_idx] # Index of Control Limit (CL)
-            rp_cost = self.c1 + self.gamma * V[0]
             if direction != 'down' and  CL_index < self.m: # 'up' or None -> Try to shift CL upwards
                 cur_state_index = self.state2index(k_idx, CL_index)
-                ob_cost = self.c3 + self.gamma * (P[[cur_state_index]]@V)[0]
+                ob_cost = self.c3 + self.gamma * exp_trans_V[cur_state_index]
                 if ob_cost < rp_cost: # Shift
                     policy[k_idx] += 1
                     momentum[k_idx] = 'up'
@@ -181,7 +181,7 @@ class OR_MDP:
                     continue
             if direction != 'up' and CL_index > 0: # 'down' or None -> Try to shift CL downwards
                 cur_state_index = self.state2index(k_idx, CL_index - 1)
-                ob_cost = self.c3 + self.gamma * P[[cur_state_index]]@V
+                ob_cost = self.c3 + self.gamma * exp_trans_V[cur_state_index]
                 if ob_cost > rp_cost: # Shift
                     policy[k_idx] -= 1
                     momentum[k_idx] = 'down'
@@ -192,6 +192,58 @@ class OR_MDP:
             momentum[k_idx] = 'done'
         return policy, momentum
 
+    def value_iteration(self,max_iter=100,tol=1e-3):
+        from scipy.stats import norm
+        V = np.zeros(self.n_states)
+        lk_indices = np.arange(self.m + 1)
+        L = np.arange(1, self.m + 1) * self.delta
+        L_lag = L - self.delta
+        for _ in range(max_iter):
+            V_pre = V.copy()
+            policy = self.m * np.ones(self.k_max,dtype=int)
+            policy[-1] = 0 # Always perform a preventive replacement at k = k_max
+
+            # Initial state - do nothing
+            L_mu = self.mu0 + self.mu1*self.t
+            L_sigma = (self.sigma0_square + self.sigma1_square*self.t**2 + self.sigma_square)**0.5
+            trans_probs = np.empty(self.m + 1)
+            trans_probs[:-1] = norm.cdf(L, loc=L_mu, scale=L_sigma) - norm.cdf(L_lag, loc=L_mu, scale=L_sigma)
+            trans_probs[-1] = 1 - norm.cdf(self.threshold, loc=L_mu, scale=L_sigma)
+            next_indices = np.arange(1, self.m + 2)
+            V[0] = self.c3 + self.gamma * trans_probs @ V[next_indices]
+
+            # k_idx = 0, ..., k_max - 1
+            prvt_rp_cost = self.c1 + self.gamma * V[0] # Preventive replacement cost
+            rct_rp_cost = self.c2 + self.gamma * V[0] # Reactive replacement cost
+            for k_idx in range(self.k_max):
+                k = k_idx + 1
+                for lk_idx in range(self.m):
+                    # lk <= theshold
+                    cur_state_index = self.state2index(k_idx, lk_idx)
+                    if lk_idx >= policy[k_idx]:
+                        # Preventive replacement
+                        V[cur_state_index] = prvt_rp_cost
+                    else:
+                        # Decide whether to perform preventive replacement
+                        lk = (lk_idx + 1) * self.delta
+                        mu0_,mu1_,sigma0_square_,sigma1_square_,rho_ = self.gen_posterior_dist(k, lk)
+                        L_mu, L_sigma_square = self.gen_L_dist(lk, mu1_, sigma1_square_)
+                        L_sigma = L_sigma_square**0.5
+                        trans_probs[:-1] = norm.cdf(L, loc=L_mu, scale=L_sigma) - norm.cdf(L_lag, loc=L_mu, scale=L_sigma)
+                        trans_probs[-1] = 1 - norm.cdf(self.threshold, loc=L_mu, scale=L_sigma)
+                        next_indices = self.state2index(k, lk_indices)
+                        ob_cost = self.c3 + self.gamma * trans_probs @ V[next_indices]
+                        if ob_cost > prvt_rp_cost:
+                            policy[k_idx] = lk_idx
+                            V[cur_state_index] = prvt_rp_cost
+                        else:
+                            V[cur_state_index] = ob_cost
+                # lk > theshold -> Reactive replacement
+                cur_state_index = self.state2index(k_idx, self.m)
+                V[cur_state_index] = rct_rp_cost
+            if np.max(np.abs(V - V_pre)) < tol:
+                break
+        return policy, V
 
 
 class My_MDP:
@@ -356,15 +408,16 @@ class My_MDP:
         return V, P, R
 
     def policy_improvement(self, policy, V, P, R, momentum):
+        rp_cost = self.c1 + self.gamma * V[0]
+        ob_costs = R + self.gamma * P@V
         for k_idx in range(self.k_max - 1):
             direction = momentum[k_idx]
             if direction == 'done':
                 continue
             CL_index = policy[k_idx] # Index of Control Limit (CL)
-            rp_cost = self.c1 + self.gamma * V[0]
             if direction != 'down' and  CL_index < self.m - 1: # 'up' or None -> Try to shift CL upwards
                 cur_state_index = self.state2index(k_idx, CL_index)
-                ob_cost = R[cur_state_index] + self.gamma * (P[[cur_state_index]]@V)[0]
+                ob_cost = ob_costs[cur_state_index]
                 if ob_cost < rp_cost: # Shift
                     policy[k_idx] += 1
                     momentum[k_idx] = 'up'
@@ -374,7 +427,7 @@ class My_MDP:
                     continue
             if direction != 'up' and CL_index > 0: # 'down' or None -> Try to shift CL downwards
                 cur_state_index = self.state2index(k_idx, CL_index - 1)
-                ob_cost = R[cur_state_index] + self.gamma * P[[cur_state_index]]@V
+                ob_cost = ob_costs[cur_state_index]
                 if ob_cost > rp_cost: # Shift
                     policy[k_idx] -= 1
                     momentum[k_idx] = 'down'
@@ -384,3 +437,55 @@ class My_MDP:
                     continue
             momentum[k_idx] = 'done'
         return policy, momentum
+
+    def value_iteration(self,max_iter=100,tol=1e-3):
+        from scipy.stats import norm
+        V = np.zeros(self.n_states)
+        lk_indices = np.arange(self.m)
+        L = np.arange(1, self.m + 1) * self.delta
+        L_lag = L - self.delta
+        failure_probs = self.predict_failure(L)
+        for _ in range(max_iter):
+            V_pre = V.copy()
+            policy = (self.m - 1) * np.ones(self.k_max,dtype=int)
+            policy[-1] = 0 # Always perform a preventive replacement at k = k_max
+
+            # Initial state - do nothing
+            failure_prob = self.predict_failure(0)
+            trans_probs = np.empty(self.m + 1)
+            trans_probs[0] = failure_prob
+            L_mu, L_sigma_square = self.gen_L_dist(0,self.mu0,self.sigma0_square)
+            L_sigma = L_sigma_square**0.5
+            trans_probs[1:] = (norm.cdf(L,loc=L_mu,scale=L_sigma) - norm.cdf(L_lag,loc=L_mu,scale=L_sigma)) * (1 - failure_prob)
+            next_indices = np.arange(self.m + 1)
+            V[0] = failure_prob * self.c2 + (1 - failure_prob) * self.c3 + self.gamma * trans_probs @ V[next_indices]
+
+            # k_idx = 0, ..., k_max - 1
+            rp_cost = self.c1 + self.gamma * V[0] # (Preventive) replacement cost
+            for k_idx in range(self.k_max):
+                k = k_idx + 1
+                for lk_idx in range(self.m):
+                    # lk <= theshold
+                    cur_state_index = self.state2index(k_idx, lk_idx)
+                    if lk_idx >= policy[k_idx]:
+                        # Preventive replacement
+                        V[cur_state_index] = rp_cost
+                    else:
+                        # Decide whether to perform preventive replacement
+                        failure_prob = failure_probs[lk_idx]
+                        trans_probs[0] = failure_prob
+                        lk = (lk_idx + 1) * self.delta
+                        mu1,sigma1_square = self.gen_posterior_dist(k, lk)
+                        L_mu, L_sigma_square = self.gen_L_dist(lk, mu1, sigma1_square)
+                        L_sigma = L_sigma_square**0.5
+                        trans_probs[1:] = (norm.cdf(L,loc=L_mu,scale=L_sigma) - norm.cdf(L_lag,loc=L_mu,scale=L_sigma)) * (1 - failure_prob)
+                        next_indices[1:] = self.state2index(k, lk_indices)
+                        ob_cost = failure_prob * self.c2 + (1 - failure_prob) * self.c3 + self.gamma * trans_probs @ V[next_indices]
+                        if ob_cost > rp_cost:
+                            policy[k_idx] = lk_idx
+                            V[cur_state_index] = rp_cost
+                        else:
+                            V[cur_state_index] = ob_cost
+            if np.max(np.abs(V - V_pre)) < tol:
+                break
+        return policy, V
