@@ -4,8 +4,9 @@ import numpy as np
 
 class OR_MDP:
     r'''
-    Implementation for the paper
-    > Alaa H. Elwany, Nagi Z. Gebraeel, Lisa M. Maillart, (2011) Structured Replacement Policies for Components with Complex Degradation Processes and Dedicated Sensors. Operations Research 59(3):684-695. 
+    Implementation for the literature
+    > Alaa H. Elwany, Nagi Z. Gebraeel, Lisa M. Maillart, (2011) Structured Replacement Policies for Components with Complex Degradation Processes and Dedicated Sensors. Operations Research 59(3):684-695.
+
     MDP of The Single-Unit Sensor-Based Replacement Problem (discretization scheme)
     - State space: W (k_max * (m + 1) + 1,)
         - One initial state (0,0)
@@ -48,14 +49,51 @@ class OR_MDP:
 
         self.t = t # The constant time between two consecutive observations
 
+    def l2l_index(self,l):
+        '''
+        Discretize degradation signal (l) to degradation signal index (l_idx).
+        l_idx = m represents failure state (l > threshold).
+        l can be an array.
+        '''
+        return np.clip(l//self.delta - 1, a_min = 1 ,a_max = self.m)
+    
+    def l_index2l(self, l_idx):
+        '''
+        Remap degradation signal index (l_idx) to degradation signal (l).
+        l_idx can be an array.
+        '''
+        return (1+l_idx)*self.delta
+
     def state2index(self, k_idx, lk_idx):
         '''
-        Map (k_idx, l_idx) to state index.
+        Map state (k_idx, lk_idx) to state index.
+        State index 0 represents initial state.
         k_idx and lk_idx can be arrays.
         '''
-        return (self.m + 1) * k_idx + lk_idx + 1
+        return (self.m + 1)  * k_idx + lk_idx + 1
+
+    def index2state(self,index):
+        '''
+        Remap state index (> 0) to state (k_idx, lk_idx).
+        '''
+        return divmod(index - 1, self.m + 1)
 
     def gen_P_R(self,policy):
+        '''
+        Generate transition probability matrix P and reward vector R given a control limit policy.
+        
+        Args:
+        - policy (array-like of int): Each element should be in the range [0, m - 1]. The policy determine whether to "do nothing" (l_k < l_k*) or "replace" (l_k >= l_k*) for each k.
+
+        Returns:
+        - P (scipy.sparse.csr_array).
+        - R (numpy.ndarray).
+
+        Notes:
+        - The method assumes that states are enumerated in a consistent flattened indexing scheme provided by `self.state2index`.
+        - Numerical precision of the normal CDF and floating point summation may cause row sums to deviate from exactly 1; if strict stochasticity is required, a row-normalization post-processing step may be applied.
+        - The implementation is optimized to pre-allocate nnz entries and fill CSR arrays incrementally; ensure nnz computation matches the policy and state-space sizes.
+        '''
         from scipy.sparse import csr_array
         from scipy.stats import norm
 
@@ -87,7 +125,7 @@ class OR_MDP:
         # L_mu, L_sigma_square = self.gen_L_dist(0, self.mu1, self.sigma1_square)
         L_mu = self.mu0 + self.mu1*self.t
         L_sigma = (self.sigma0_square + self.sigma1_square*self.t**2 + self.sigma_square)**0.5
-        L = np.arange(1, self.m + 1) * self.delta
+        L = self.l_index2l(np.arange(self.m))
         L_lag = L - self.delta # Notice that `L` and `L_lag` are shared arrays covering range of lk
         p_start = 0 # Pointer operation
         p_end = p_start + self.m
@@ -103,7 +141,7 @@ class OR_MDP:
                 p_start = p_end
                 cur_state_index = self.state2index(k_idx, lk_idx)
                 if lk_idx < policy[k_idx]: # Do nothing
-                    lk = (lk_idx + 1) * self.delta
+                    lk = L[lk_idx]
                     mu0_,mu1_,sigma0_square_,sigma1_square_,rho_ = self.gen_posterior_dist(k, lk)
                     L_mu, L_sigma_square = self.gen_L_dist(lk, mu1_, sigma1_square_)
                     L_sigma = L_sigma_square**0.5
@@ -122,6 +160,23 @@ class OR_MDP:
         return P, R
 
     def gen_posterior_dist(self, k, lk):
+        '''
+        Compute the posterior distributioins of parameters of 2-param Exponential Degradation Model with Brownian Error Terms.
+        
+        Args:
+        - k (int).
+        - lk (float).
+
+        Returns:
+        - mu0_ (float): Posterior mean for the first param.
+        - mu1_ (float): Posterior mean for the second param.
+        - sigma0_square_ (float): Posterior marginal variance for the first param.
+        - sigma1_square_ (float): Posterior marginal variance for the second param.
+        - rho_ (float): Posterior correlation coefficient between the two latent variables.
+        
+        References:
+        - This update follows Proposition 1 in the literature "Alaa H. Elwany, Nagi Z. Gebraeel, Lisa M. Maillart, (2011) Structured Replacement Policies for Components with Complex Degradation Processes and Dedicated Sensors. Operations Research 59(3):684-695."
+        '''
         tmp1 = self.mu0*self.sigma_square*self.t # +self.l_min*self.sigma0_square
         tmp2 = self.sigma1_square*k*self.t+self.sigma_square
         tmp3 = lk*self.sigma1_square+self.mu1*self.sigma_square
@@ -136,13 +191,47 @@ class OR_MDP:
         return mu0_,mu1_,sigma0_square_,sigma1_square_,rho_
 
     def gen_L_dist(self,lk, mu1_, sigma1_square_):
+        '''
+        Compute the Predictive distributioins of the next degradation signal (L) of Exponential Degradation Model with Brownian Error Terms after time interval t.
+        
+        Args:
+        - lk (float): Current observed degradation level (intercept).
+        - mu1_ (float): Estimated mean for the second param.
+        - sigma1_square_ (float): Estimated variance for the second param.
+
+        Returns:
+        - L_mu (float): Predictive mean of L.
+        - L_sigma_square (float): Predictive variance of L.
+        
+        References:
+        - This update follows Proposition 2 in the literature "Alaa H. Elwany, Nagi Z. Gebraeel, Lisa M. Maillart, (2011) Structured Replacement Policies for Components with Complex Degradation Processes and Dedicated Sensors. Operations Research 59(3):684-695."
+        '''
         L_mu = lk + mu1_*self.t
         L_sigma_square = sigma1_square_*self.t**2 + self.sigma_square*self.t
         return L_mu, L_sigma_square
 
     def policy_iteration(self,policy=None,max_iter=10):
+        '''
+        Perform policy iteration to compute an optimal policy for this MDP. This method runs iterative policy evaluation followed by policy improvement until the policy converges or a maximum number of iterations is reached.
+
+        Args:
+        - policy (array-like of int, optional): Initial policy to start iteration from. Expected length is k_max. If None (default), every element is assigned m - 1, except the final one which is set to 0 (a preventive replacement). 
+        - max_iter (int, optional):  Maximum number of policy-iteration cycles to perform. Default 10. Iteration stops early if the policy becomes stable.
+
+        Returns:
+        - policy (numpy.ndarray).
+        - V (numpy.ndarray): The value function associated with `policy`, as returned by `self.policy_evaluation`.
+        - P (scipy.sparse.csr_array): Transition probability matrix returned by `self.policy_evaluation`.
+        - R (numpy.ndarray): Reward vector returned by `self.policy_evaluation`.
+
+        Notes:
+        - Internally, a `momentum` structure is passed to `self.policy_improvement` across iterations to accelerate updates by considering structured properties of optimal policy.
+
+        References:
+        - This algorithm follows Appendix A in the literature "Alaa H. Elwany, Nagi Z. Gebraeel, Lisa M. Maillart, (2011) Structured Replacement Policies for Components with Complex Degradation Processes and Dedicated Sensors. Operations Research 59(3):684-695."
+        '''
         if policy is None:
-            policy = self.m * np.ones(self.k_max,dtype=int)
+            policy = (self.m - 1) * np.ones(self.k_max,dtype=int)
             policy[-1] = 0 # Always perform a preventive replacement at k = k_max
             # policy = np.zeros(self.k_max,dtype=int)
         momentum = [None] * (self.k_max - 1)
@@ -169,7 +258,7 @@ class OR_MDP:
             if direction == 'done':
                 continue
             CL_index = policy[k_idx] # Index of Control Limit (CL)
-            if direction != 'down' and  CL_index < self.m: # 'up' or None -> Try to shift CL upwards
+            if direction != 'down' and  CL_index < self.m - 1: # 'up' or None -> Try to shift CL upwards
                 cur_state_index = self.state2index(k_idx, CL_index)
                 ob_cost = self.c3 + self.gamma * exp_trans_V[cur_state_index]
                 if ob_cost < rp_cost: # Shift
@@ -193,14 +282,25 @@ class OR_MDP:
         return policy, momentum
 
     def value_iteration(self,max_iter=100,tol=1e-3):
+        '''
+        Perform synchronous value iteration to compute an optimal preventive-replacement policy.
+
+        Args:
+        - max_iter (int, optional):  Maximum number of iterations to run the value-iteration loop. Iteration stops earlier if convergence (measured by the maximum absolute change in the value function) is achieved. Default 100.
+        - tol (float, optional):  Convergence tolerance for the value function: stop when max_i |V_new[i] - V_old[i]| < tol. Default 1e-3.
+
+        Returns:
+        - policy (numpy.ndarray).
+        - V (numpy.ndarray): The value function associated with `policy`.
+        '''
         from scipy.stats import norm
         V = np.zeros(self.n_states)
         lk_indices = np.arange(self.m + 1)
-        L = np.arange(1, self.m + 1) * self.delta
+        L = self.l_index2l(np.arange(self.m))
         L_lag = L - self.delta
         for _ in range(max_iter):
             V_pre = V.copy()
-            policy = self.m * np.ones(self.k_max,dtype=int)
+            policy = (self.m - 1) * np.ones(self.k_max,dtype=int)
             policy[-1] = 0 # Always perform a preventive replacement at k = k_max
 
             # Initial state - do nothing
@@ -225,7 +325,7 @@ class OR_MDP:
                         V[cur_state_index] = prvt_rp_cost
                     else:
                         # Decide whether to perform preventive replacement
-                        lk = (lk_idx + 1) * self.delta
+                        lk = L[lk_idx]
                         mu0_,mu1_,sigma0_square_,sigma1_square_,rho_ = self.gen_posterior_dist(k, lk)
                         L_mu, L_sigma_square = self.gen_L_dist(lk, mu1_, sigma1_square_)
                         L_sigma = L_sigma_square**0.5
@@ -288,14 +388,50 @@ class My_MDP:
         self.C1 = C1
         self.C2 = C2 - l_min
 
+    def l2l_index(self,l):
+        '''
+        Discretize degradation signal (l) to degradation signal index (l_idx).
+        l can be an array.
+        '''
+        return l//self.delta - 1
+    
+    def l_index2l(self, l_idx):
+        '''
+        Remap degradation signal index (l_idx) to degradation signal (l).
+        l_idx can be an array.
+        '''
+        return (1+l_idx)*self.delta
+
     def state2index(self, k_idx, lk_idx):
         '''
-        Map (k_idx, l_idx) to state index.
+        Map state (k_idx, lk_idx) to state index.
+        State index 0 represents initial state.
         k_idx and lk_idx can be arrays.
         '''
         return self.m  * k_idx + lk_idx + 1
 
+    def index2state(self,index):
+        '''
+        Remap state index (> 0) to state (k_idx, lk_idx).
+        '''
+        return divmod(index - 1, self.m)
+
     def gen_P_R(self,policy):
+        '''
+        Generate transition probability matrix P and reward vector R given a control limit policy.
+        
+        Args:
+        - policy (array-like of int): Each element should be in the range [0, m - 1]. The policy determine whether to "do nothing" (l_k < l_k*) or "preventive replace" (l_k >= l_k*) for each k.
+
+        Returns:
+        - P (scipy.sparse.csr_array).
+        - R (numpy.ndarray).
+
+        Notes:
+        - The method assumes that states are enumerated in a consistent flattened indexing scheme provided by `self.state2index`.
+        - Numerical precision of the normal CDF and floating point summation may cause row sums to deviate from exactly 1; if strict stochasticity is required, a row-normalization post-processing step may be applied.
+        - The implementation is optimized to pre-allocate nnz entries and fill CSR arrays incrementally; ensure nnz computation matches the policy and state-space sizes.
+        '''
         from scipy.sparse import csr_array
         from scipy.stats import norm
 
@@ -306,7 +442,7 @@ class My_MDP:
         repeated_k_indice = np.repeat(np.arange(self.k_max), policy)
         lk_indices = np.concatenate([np.arange(lk_star_index) for lk_star_index in policy])
         ob_indices = self.state2index(repeated_k_indice,lk_indices)
-        failure_probs = self.predict_failure((1+lk_indices)*self.delta)
+        failure_probs = self.predict_failure(self.l_index2l(lk_indices))
         R[ob_indices] = failure_probs * self.c2 + (1 - failure_probs) * self.c3
         failure_prob = self.predict_failure(0)
         R[0] = failure_prob * self.c2 + (1 - failure_prob) * self.c3
@@ -326,7 +462,7 @@ class My_MDP:
         csr_col_indices[p_start] = 0
         L_mu, L_sigma_square = self.gen_L_dist(0,self.mu0,self.sigma0_square)
         L_sigma = L_sigma_square**0.5
-        L = np.arange(1, self.m + 1) * self.delta
+        L = self.l_index2l(np.arange(self.m))
         L_lag = L - self.delta # Notice that `L` and `L_lag` are shared arrays covering range of lk
         p_end = p_start + self.m + 1
         csr_row_indices[p_start:p_end] = 0
@@ -362,11 +498,34 @@ class My_MDP:
         return P, R
 
     def gen_posterior_dist(self, k, lk):
+        '''
+        Compute the posterior distributioins of parameters of 1-param Exponential Degradation Model with Brownian Error Terms.
+        
+        Args:
+        - k (int).
+        - lk (float).
+
+        Returns:
+        - mu1 (float): Posterior mean for the param.
+        - sigma1_square (float): Posterior variance for the param.
+        '''
         sigma1_square = 1/((1/self.sigma0_square)+(k*self.t/self.sigma_square))
         mu1 = sigma1_square*((self.mu0/self.sigma0_square)+(lk*self.t/self.sigma_square))
         return mu1, sigma1_square
 
     def gen_L_dist(self,lk, mu1, sigma1_square):
+        '''
+        Compute the Predictive distributioins of the next degradation signal (L) of Exponential Degradation Model with Brownian Error Terms after time interval t.
+        
+        Args:
+        - lk (float): Current observed degradation level (intercept).
+        - mu1 (float): Estimated mean for the param.
+        - sigma1_square (float): Estimated variance for the param.
+
+        Returns:
+        - L_mu (float): Predictive mean of L.
+        - L_sigma_square (float): Predictive variance of L.
+        '''
         L_mu = lk + mu1*self.t
         L_sigma_square = sigma1_square*self.t**2 + self.sigma_square*self.t
         return L_mu, L_sigma_square
@@ -386,6 +545,25 @@ class My_MDP:
         return p
 
     def policy_iteration(self,policy=None,max_iter=10):
+        '''
+        Perform policy iteration to compute an optimal policy for this MDP. This method runs iterative policy evaluation followed by policy improvement until the policy converges or a maximum number of iterations is reached.
+
+        Args:
+        - policy (array-like of int, optional): Initial policy to start iteration from. Expected length is k_max. If None (default), every element is assigned m - 1, except the final one which is set to 0 (a preventive replacement). 
+        - max_iter (int, optional):  Maximum number of policy-iteration cycles to perform. Default 10. Iteration stops early if the policy becomes stable.
+
+        Returns:
+        - policy (numpy.ndarray).
+        - V (numpy.ndarray): The value function associated with `policy`, as returned by `self.policy_evaluation`.
+        - P (scipy.sparse.csr_array): Transition probability matrix returned by `self.policy_evaluation`.
+        - R (numpy.ndarray): Reward vector returned by `self.policy_evaluation`.
+
+        Notes:
+        - Internally, a `momentum` structure is passed to `self.policy_improvement` across iterations to accelerate updates by considering structured properties of optimal policy.
+
+        References:
+        - This algorithm follows Appendix A in the literature "Alaa H. Elwany, Nagi Z. Gebraeel, Lisa M. Maillart, (2011) Structured Replacement Policies for Components with Complex Degradation Processes and Dedicated Sensors. Operations Research 59(3):684-695."
+        '''
         if policy is None:
             policy = (self.m - 1) * np.ones(self.k_max,dtype=int)
             policy[-1] = 0 # Always perform a preventive replacement at k = k_max
@@ -396,7 +574,6 @@ class My_MDP:
             V, P, R = self.policy_evaluation(policy)
             policy, momentum = self.policy_improvement(policy, V, P, R, momentum)
             if np.array_equal(policy,policy_pre):
-                print(_+1)
                 break
         return policy, V, P, R
 
@@ -439,10 +616,21 @@ class My_MDP:
         return policy, momentum
 
     def value_iteration(self,max_iter=100,tol=1e-3):
+        '''
+        Perform synchronous value iteration to compute an optimal preventive-replacement policy.
+
+        Args:
+        - max_iter (int, optional):  Maximum number of iterations to run the value-iteration loop. Iteration stops earlier if convergence (measured by the maximum absolute change in the value function) is achieved. Default 100.
+        - tol (float, optional):  Convergence tolerance for the value function: stop when max_i |V_new[i] - V_old[i]| < tol. Default 1e-3.
+
+        Returns:
+        - policy (numpy.ndarray).
+        - V (numpy.ndarray): The value function associated with `policy`.
+        '''
         from scipy.stats import norm
         V = np.zeros(self.n_states)
         lk_indices = np.arange(self.m)
-        L = np.arange(1, self.m + 1) * self.delta
+        L = self.l_index2l(lk_indices)
         L_lag = L - self.delta
         failure_probs = self.predict_failure(L)
         for _ in range(max_iter):
@@ -474,7 +662,7 @@ class My_MDP:
                         # Decide whether to perform preventive replacement
                         failure_prob = failure_probs[lk_idx]
                         trans_probs[0] = failure_prob
-                        lk = (lk_idx + 1) * self.delta
+                        lk = L[lk_idx]
                         mu1,sigma1_square = self.gen_posterior_dist(k, lk)
                         L_mu, L_sigma_square = self.gen_L_dist(lk, mu1, sigma1_square)
                         L_sigma = L_sigma_square**0.5
