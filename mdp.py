@@ -1,4 +1,6 @@
 import numpy as np
+from scipy.sparse import csr_array
+from scipy.stats import norm
 
 
 
@@ -32,7 +34,7 @@ class OR_MDP:
         self.threshold = l_max - l_min
         self.m = m
         self.delta = self.threshold / m
-        self.n_states = 1 + k_max * (m + 1)
+        self.n_state = 1 + k_max * (m + 1)
 
         # Rewards (costs)
         self.c1 = c1
@@ -48,6 +50,20 @@ class OR_MDP:
         self.sigma_square = sigma_square
 
         self.t = t # The constant time between two consecutive observations
+
+    def hi2l(self,hi):
+        r'''
+        Transform Health Index (hi \in (-\infinity, +\infinity)) to degradation signal (l \in [0, +\infinity)).
+        hi can be an array.
+        '''
+        return hi - self.l_min
+
+    def l2hi(self,l):
+        r'''
+        Restore degradation signal (l \in [0, +\infinity)) to Health Index (hi \in (-\infinity, +\infinity)).
+        l can be an array.
+        '''
+        return l + self.l_min
 
     def l2l_index(self,l):
         '''
@@ -72,18 +88,19 @@ class OR_MDP:
         '''
         return (self.m + 1)  * k_idx + lk_idx + 1
 
-    def index2state(self,index):
+    def index2state(self, index):
         '''
         Remap state index (> 0) to state (k_idx, lk_idx).
         '''
         return divmod(index - 1, self.m + 1)
 
-    def gen_P_R(self,policy):
+    def gen_P_R(self, policy, normalization = True):
         '''
         Generate transition probability matrix P and reward vector R given a control limit policy.
         
         Args:
         - policy (array-like of int): Each element should be in the range [0, m - 1]. The policy determine whether to "do nothing" (l_k < l_k*) or "replace" (l_k >= l_k*) for each k.
+        - normalization  (bool, optional) : If True, conditional probabilities over discretized next-level bins (given survival)are normalized to sum to 1. Default True.
 
         Returns:
         - P (scipy.sparse.csr_array).
@@ -91,15 +108,12 @@ class OR_MDP:
 
         Notes:
         - The method assumes that states are enumerated in a consistent flattened indexing scheme provided by `self.state2index`.
-        - Numerical precision of the normal CDF and floating point summation may cause row sums to deviate from exactly 1; if strict stochasticity is required, a row-normalization post-processing step may be applied.
+        - Numerical precision of the normal CDF and floating point summation may cause row sums to deviate from exactly 1; the `normalization` flag enables re-normalizing each row's survival-probability vector.
         - The implementation is optimized to pre-allocate nnz entries and fill CSR arrays incrementally; ensure nnz computation matches the policy and state-space sizes.
         '''
-        from scipy.sparse import csr_array
-        from scipy.stats import norm
-
         # Generate R
             # Preventive replacement costs (c1, remain to be covered)
-        R = self.c1 * np.ones(self.n_states)
+        R = self.c1 * np.ones(self.n_state)
             # Reactive replacement costs (c2)
         failure_indices = self.state2index(np.arange(self.k_max),self.m)
         R[failure_indices] = self.c2
@@ -119,21 +133,25 @@ class OR_MDP:
         csr_values, csr_row_indices, csr_col_indices = np.empty(nnz), np.empty(nnz, dtype=int), np.empty(nnz, dtype=int)
 
         # Calculate transition probabilities
+            # Shared computation results
+        lk_indices = np.arange(self.m + 1)
+        L_vec = self.l_index2l(lk_indices[:-1]) # Covering range of lk
+        L_lag_vec = L_vec - self.delta
             # Initial state - do nothing
         # mu0_,mu1_,sigma0_square_,sigma1_square_,rho_ = self.gen_posterior_dist(0,0)
         # L_mu, L_sigma_square = self.gen_L_dist(0, mu1_, sigma1_square_)
         # L_mu, L_sigma_square = self.gen_L_dist(0, self.mu1, self.sigma1_square)
         L_mu = self.mu0 + self.mu1*self.t
         L_sigma = (self.sigma0_square + self.sigma1_square*self.t**2 + self.sigma_square)**0.5
-        L = self.l_index2l(np.arange(self.m))
-        L_lag = L - self.delta # Notice that `L` and `L_lag` are shared arrays covering range of lk
         p_start = 0 # Pointer operation
         p_end = p_start + self.m
-        csr_values[p_start:p_end] = (norm.cdf(L,loc=L_mu,scale=L_sigma) - norm.cdf(L_lag,loc=L_mu,scale=L_sigma))
+        csr_values[p_start:p_end] = (norm.cdf(L_vec,loc=L_mu,scale=L_sigma) - norm.cdf(L_lag_vec,loc=L_mu,scale=L_sigma))
         csr_values[p_end] = (1 - norm.cdf(self.threshold,loc=L_mu,scale=L_sigma))
         p_end += 1
+        if normalization:
+            csr_values[p_start:p_end] /= csr_values[p_start:p_end].sum()
         csr_row_indices[p_start:p_end] = 0
-        csr_col_indices[p_start:p_end] = np.arange(1, self.m + 2)
+        csr_col_indices[p_start:p_end] = self.state2index(0,lk_indices)
             # k_idx = 0, ..., k_max - 1
         for k_idx in range(self.k_max):
             k = k_idx + 1
@@ -141,22 +159,24 @@ class OR_MDP:
                 p_start = p_end
                 cur_state_index = self.state2index(k_idx, lk_idx)
                 if lk_idx < policy[k_idx]: # Do nothing
-                    lk = L[lk_idx]
+                    lk = L_vec[lk_idx]
                     mu0_,mu1_,sigma0_square_,sigma1_square_,rho_ = self.gen_posterior_dist(k, lk)
                     L_mu, L_sigma_square = self.gen_L_dist(lk, mu1_, sigma1_square_)
                     L_sigma = L_sigma_square**0.5
                     p_end = p_start + self.m
-                    csr_values[p_start:p_end] = (norm.cdf(L,loc=L_mu,scale=L_sigma) - norm.cdf(L_lag,loc=L_mu,scale=L_sigma))
+                    csr_values[p_start:p_end] = (norm.cdf(L_vec,loc=L_mu,scale=L_sigma) - norm.cdf(L_lag_vec,loc=L_mu,scale=L_sigma))
                     csr_values[p_end] = (1 - norm.cdf(self.threshold,loc=L_mu,scale=L_sigma))
                     p_end += 1
+                    if normalization:
+                        csr_values[p_start:p_end] /= csr_values[p_start:p_end].sum()
                     csr_row_indices[p_start:p_end] = cur_state_index
-                    csr_col_indices[p_start:p_end] = self.state2index(k,np.arange(self.m + 1))
+                    csr_col_indices[p_start:p_end] = self.state2index(k,lk_indices)
                 else: # Replace
                     csr_values[p_start] = 1.
                     csr_row_indices[p_start] = cur_state_index
                     csr_col_indices[p_start] = 0
                     p_end += 1
-        P = csr_array((csr_values,(csr_row_indices, csr_col_indices)),shape=(self.n_states,self.n_states))
+        P = csr_array((csr_values,(csr_row_indices, csr_col_indices)),shape=(self.n_state,self.n_state))
         return P, R
 
     def gen_posterior_dist(self, k, lk):
@@ -190,12 +210,12 @@ class OR_MDP:
         rho_ = -np.sqrt(self.sigma0_square*self.sigma1_square*self.t / (tmp4 * tmp2))
         return mu0_,mu1_,sigma0_square_,sigma1_square_,rho_
 
-    def gen_L_dist(self,lk, mu1_, sigma1_square_):
+    def gen_L_dist(self, l, mu1_, sigma1_square_):
         '''
         Compute the Predictive distributioins of the next degradation signal (L) of Exponential Degradation Model with Brownian Error Terms after time interval t.
         
         Args:
-        - lk (float): Current observed degradation level (intercept).
+        - l (float): Current observed degradation level (intercept).
         - mu1_ (float): Estimated mean for the second param.
         - sigma1_square_ (float): Estimated variance for the second param.
 
@@ -206,11 +226,11 @@ class OR_MDP:
         References:
         - This update follows Proposition 2 in the literature "Alaa H. Elwany, Nagi Z. Gebraeel, Lisa M. Maillart, (2011) Structured Replacement Policies for Components with Complex Degradation Processes and Dedicated Sensors. Operations Research 59(3):684-695."
         '''
-        L_mu = lk + mu1_*self.t
+        L_mu = l + mu1_*self.t
         L_sigma_square = sigma1_square_*self.t**2 + self.sigma_square*self.t
         return L_mu, L_sigma_square
 
-    def policy_iteration(self,policy=None,max_iter=10):
+    def policy_iteration(self, policy=None, max_iter=10):
         '''
         Perform policy iteration to compute an optimal policy for this MDP. This method runs iterative policy evaluation followed by policy improvement until the policy converges or a maximum number of iterations is reached.
 
@@ -247,7 +267,7 @@ class OR_MDP:
         from scipy.sparse import eye
         from scipy.sparse.linalg import spsolve
         P, R = self.gen_P_R(policy)
-        V = spsolve(eye(self.n_states) - self.gamma * P, R)
+        V = spsolve(eye(self.n_state) - self.gamma * P, R)
         return V, P, R
 
     def policy_improvement(self, policy, V, P, momentum):
@@ -281,23 +301,23 @@ class OR_MDP:
             momentum[k_idx] = 'done'
         return policy, momentum
 
-    def value_iteration(self,max_iter=100,tol=1e-3):
+    def value_iteration(self, max_iter=100, tol=1e-3, normalization = True):
         '''
         Perform synchronous value iteration to compute an optimal preventive-replacement policy.
 
         Args:
         - max_iter (int, optional):  Maximum number of iterations to run the value-iteration loop. Iteration stops earlier if convergence (measured by the maximum absolute change in the value function) is achieved. Default 100.
         - tol (float, optional):  Convergence tolerance for the value function: stop when max_i |V_new[i] - V_old[i]| < tol. Default 1e-3.
+        - normalization  (bool, optional) : If True, conditional probabilities over discretized next-level bins (given survival)are normalized to sum to 1. Default True.
 
         Returns:
         - policy (numpy.ndarray).
         - V (numpy.ndarray): The value function associated with `policy`.
         '''
-        from scipy.stats import norm
-        V = np.zeros(self.n_states)
+        V = np.zeros(self.n_state)
         lk_indices = np.arange(self.m + 1)
-        L = self.l_index2l(np.arange(self.m))
-        L_lag = L - self.delta
+        L_vec = self.l_index2l(np.arange(self.m))
+        L_lag_vec = L_vec - self.delta
         for _ in range(max_iter):
             V_pre = V.copy()
             policy = (self.m - 1) * np.ones(self.k_max,dtype=int)
@@ -307,8 +327,10 @@ class OR_MDP:
             L_mu = self.mu0 + self.mu1*self.t
             L_sigma = (self.sigma0_square + self.sigma1_square*self.t**2 + self.sigma_square)**0.5
             trans_probs = np.empty(self.m + 1)
-            trans_probs[:-1] = norm.cdf(L, loc=L_mu, scale=L_sigma) - norm.cdf(L_lag, loc=L_mu, scale=L_sigma)
+            trans_probs[:-1] = norm.cdf(L_vec, loc=L_mu, scale=L_sigma) - norm.cdf(L_lag_vec, loc=L_mu, scale=L_sigma)
             trans_probs[-1] = 1 - norm.cdf(self.threshold, loc=L_mu, scale=L_sigma)
+            if normalization:
+                trans_probs /= trans_probs.sum()
             next_indices = np.arange(1, self.m + 2)
             V[0] = self.c3 + self.gamma * trans_probs @ V[next_indices]
 
@@ -325,12 +347,14 @@ class OR_MDP:
                         V[cur_state_index] = prvt_rp_cost
                     else:
                         # Decide whether to perform preventive replacement
-                        lk = L[lk_idx]
+                        lk = L_vec[lk_idx]
                         mu0_,mu1_,sigma0_square_,sigma1_square_,rho_ = self.gen_posterior_dist(k, lk)
                         L_mu, L_sigma_square = self.gen_L_dist(lk, mu1_, sigma1_square_)
                         L_sigma = L_sigma_square**0.5
-                        trans_probs[:-1] = norm.cdf(L, loc=L_mu, scale=L_sigma) - norm.cdf(L_lag, loc=L_mu, scale=L_sigma)
+                        trans_probs[:-1] = norm.cdf(L_vec, loc=L_mu, scale=L_sigma) - norm.cdf(L_lag_vec, loc=L_mu, scale=L_sigma)
                         trans_probs[-1] = 1 - norm.cdf(self.threshold, loc=L_mu, scale=L_sigma)
+                        if normalization:
+                            trans_probs /= trans_probs.sum()
                         next_indices = self.state2index(k, lk_indices)
                         ob_cost = self.c3 + self.gamma * trans_probs @ V[next_indices]
                         if ob_cost > prvt_rp_cost:
@@ -371,7 +395,7 @@ class My_MDP:
         self.l_max = l_max
         self.m = m
         self.delta = (l_max - l_min) / m
-        self.n_states = k_max * m + 1
+        self.n_state = k_max * m + 1
 
         # Rewards
         self.c1 = c1
@@ -388,6 +412,20 @@ class My_MDP:
         self.C1 = C1
         self.C2 = C2 - l_min
 
+    def hi2l(self,hi):
+        r'''
+        Transform from Health Index (hi \in (-\infinity, +\infinity)) to degradation signal (l \in [0, +\infinity)).
+        hi can be an array.
+        '''
+        return np.log(hi + self.C1) + self.C2
+
+    def l2hi(self,l):
+        r'''
+        Inverse transform from degradation signal (l \in [0, +\infinity)) to Health Index (hi \in (-\infinity, +\infinity)).
+        l can be an array.
+        '''
+        return -self.C1 + np.exp(np.clip(l, a_min = self.l_min, a_max = self.l_max) - self.C2)
+
     def l2l_index(self,l):
         '''
         Discretize degradation signal (l) to degradation signal index (l_idx).
@@ -400,7 +438,7 @@ class My_MDP:
         Remap degradation signal index (l_idx) to degradation signal (l).
         l_idx can be an array.
         '''
-        return (1+l_idx)*self.delta
+        return (1 + l_idx) * self.delta
 
     def state2index(self, k_idx, lk_idx):
         '''
@@ -416,12 +454,13 @@ class My_MDP:
         '''
         return divmod(index - 1, self.m)
 
-    def gen_P_R(self,policy):
+    def gen_P_R(self,policy, normalization = True):
         '''
         Generate transition probability matrix P and reward vector R given a control limit policy.
         
         Args:
         - policy (array-like of int): Each element should be in the range [0, m - 1]. The policy determine whether to "do nothing" (l_k < l_k*) or "preventive replace" (l_k >= l_k*) for each k.
+        - normalization  (bool, optional) : If True, conditional probabilities over discretized next-level bins (given survival) are normalized to sum to 1. Default True.
 
         Returns:
         - P (scipy.sparse.csr_array).
@@ -429,21 +468,18 @@ class My_MDP:
 
         Notes:
         - The method assumes that states are enumerated in a consistent flattened indexing scheme provided by `self.state2index`.
-        - Numerical precision of the normal CDF and floating point summation may cause row sums to deviate from exactly 1; if strict stochasticity is required, a row-normalization post-processing step may be applied.
+        - Numerical precision of the normal CDF and floating point summation may cause row sums to deviate from exactly 1; the `normalization` flag enables re-normalizing each row's survival-probability vector.
         - The implementation is optimized to pre-allocate nnz entries and fill CSR arrays incrementally; ensure nnz computation matches the policy and state-space sizes.
         '''
-        from scipy.sparse import csr_array
-        from scipy.stats import norm
-
         # Generate R
             # Preventive replacement costs (c1, remain to be covered)
-        R = self.c1 * np.ones(self.n_states)
-            # Expected costs for "do nothing" (p*c2 + (1-p)*c3). Notice that 0 < k < k_max
+        R = self.c1 * np.ones(self.n_state)
+            # Expected costs for "do nothing" (p*c2 + (1-p)*c3). Note that 0 < k < k_max
         repeated_k_indice = np.repeat(np.arange(self.k_max), policy)
         lk_indices = np.concatenate([np.arange(lk_star_index) for lk_star_index in policy])
         ob_indices = self.state2index(repeated_k_indice,lk_indices)
-        failure_probs = self.predict_failure(self.l_index2l(lk_indices))
-        R[ob_indices] = failure_probs * self.c2 + (1 - failure_probs) * self.c3
+        failure_prob_vec = self.predict_failure(self.l_index2l(lk_indices))
+        R[ob_indices] = failure_prob_vec * self.c2 + (1 - failure_prob_vec) * self.c3
         failure_prob = self.predict_failure(0)
         R[0] = failure_prob * self.c2 + (1 - failure_prob) * self.c3
 
@@ -456,45 +492,53 @@ class My_MDP:
         csr_values, csr_row_indices, csr_col_indices = np.empty(nnz), np.empty(nnz, dtype=int), np.empty(nnz, dtype=int)
 
         # Calculate transition probabilities
+            # Shared computation results
+        lk_indices = np.arange(self.m)
+        L_vec = self.l_index2l(lk_indices) # Covering range of lk
+        L_lag_vec = L_vec - self.delta
+        failure_prob_vec = self.predict_failure(L_vec)
             # Initial state - do nothing
         p_start = 0 # Pointer operation
         csr_values[p_start] = failure_prob # Calculated when generating R
         csr_col_indices[p_start] = 0
         L_mu, L_sigma_square = self.gen_L_dist(0,self.mu0,self.sigma0_square)
         L_sigma = L_sigma_square**0.5
-        L = self.l_index2l(np.arange(self.m))
-        L_lag = L - self.delta # Notice that `L` and `L_lag` are shared arrays covering range of lk
         p_end = p_start + self.m + 1
         csr_row_indices[p_start:p_end] = 0
         p_start += 1
-        csr_values[p_start:p_end] = (norm.cdf(L,loc=L_mu,scale=L_sigma) - norm.cdf(L_lag,loc=L_mu,scale=L_sigma)) * (1 - failure_prob)
-        csr_col_indices[p_start:p_end] = np.arange(1, self.m + 1)
+        evlv_p = norm.cdf(L_vec,loc=L_mu,scale=L_sigma) - norm.cdf(L_lag_vec,loc=L_mu,scale=L_sigma)
+        if normalization:
+            evlv_p /= evlv_p.sum()
+        csr_values[p_start:p_end] = evlv_p * (1 - failure_prob)
+        csr_col_indices[p_start:p_end] = self.state2index(0,lk_indices)
             # k_idx = 0, ..., k_max - 1
-        failure_probs = self.predict_failure(L)
         for k_idx in range(self.k_max):
             k = k_idx + 1
             for lk_idx in range(self.m):
                 p_start = p_end
                 cur_state_index = self.state2index(k_idx, lk_idx)
                 if lk_idx < policy[k_idx]: # Do nothing
-                    failure_prob = failure_probs[lk_idx]
+                    failure_prob = failure_prob_vec[lk_idx]
                     csr_values[p_start] = failure_prob
                     csr_col_indices[p_start] = 0
-                    lk = L[lk_idx]
+                    lk = L_vec[lk_idx]
                     mu1,sigma1_square = self.gen_posterior_dist(k, lk)
                     L_mu, L_sigma_square = self.gen_L_dist(lk, mu1, sigma1_square)
                     L_sigma = L_sigma_square**0.5
                     p_end = p_start + self.m + 1
                     csr_row_indices[p_start:p_end] = cur_state_index
                     p_start += 1
-                    csr_values[p_start:p_end] = (norm.cdf(L,loc=L_mu,scale=L_sigma) - norm.cdf(L_lag,loc=L_mu,scale=L_sigma)) * (1 - failure_prob)
-                    csr_col_indices[p_start:p_end] = self.state2index(k,np.arange(self.m))
+                    evlv_p = norm.cdf(L_vec,loc=L_mu,scale=L_sigma) - norm.cdf(L_lag_vec,loc=L_mu,scale=L_sigma)
+                    if normalization:
+                        evlv_p /= evlv_p.sum()
+                    csr_values[p_start:p_end] = evlv_p * (1 - failure_prob)
+                    csr_col_indices[p_start:p_end] = self.state2index(k,lk_indices)
                 else: # Replace
                     csr_values[p_start] = 1.
                     csr_row_indices[p_start] = cur_state_index
                     csr_col_indices[p_start] = 0
                     p_end += 1
-        P = csr_array((csr_values,(csr_row_indices, csr_col_indices)),shape=(self.n_states,self.n_states))
+        P = csr_array((csr_values,(csr_row_indices, csr_col_indices)),shape=(self.n_state,self.n_state))
         return P, R
 
     def gen_posterior_dist(self, k, lk):
@@ -513,12 +557,12 @@ class My_MDP:
         mu1 = sigma1_square*((self.mu0/self.sigma0_square)+(lk*self.t/self.sigma_square))
         return mu1, sigma1_square
 
-    def gen_L_dist(self,lk, mu1, sigma1_square):
+    def gen_L_dist(self, l, mu1, sigma1_square):
         '''
         Compute the Predictive distributioins of the next degradation signal (L) of Exponential Degradation Model with Brownian Error Terms after time interval t.
         
         Args:
-        - lk (float): Current observed degradation level (intercept).
+        - l (float): Current observed degradation level (intercept).
         - mu1 (float): Estimated mean for the param.
         - sigma1_square (float): Estimated variance for the param.
 
@@ -526,7 +570,7 @@ class My_MDP:
         - L_mu (float): Predictive mean of L.
         - L_sigma_square (float): Predictive variance of L.
         '''
-        L_mu = lk + mu1*self.t
+        L_mu = l + mu1*self.t
         L_sigma_square = sigma1_square*self.t**2 + self.sigma_square*self.t
         return L_mu, L_sigma_square
 
@@ -535,7 +579,7 @@ class My_MDP:
         Failure probability at next epoch.
         '''
         # Reverse log transformation
-        hi = -self.C1 + np.exp(l - self.C2)
+        hi = self.l2hi(l)
         # Sigmoid function
         p = np.where(
             hi >= 0,
@@ -581,7 +625,7 @@ class My_MDP:
         from scipy.sparse import eye
         from scipy.sparse.linalg import spsolve
         P, R = self.gen_P_R(policy)
-        V = spsolve(eye(self.n_states) - self.gamma * P, R)
+        V = spsolve(eye(self.n_state) - self.gamma * P, R)
         return V, P, R
 
     def policy_improvement(self, policy, V, P, R, momentum):
@@ -615,24 +659,28 @@ class My_MDP:
             momentum[k_idx] = 'done'
         return policy, momentum
 
-    def value_iteration(self,max_iter=100,tol=1e-3):
+    def value_iteration(self,max_iter=100,tol=1e-3, normalization = True):
         '''
         Perform synchronous value iteration to compute an optimal preventive-replacement policy.
 
         Args:
         - max_iter (int, optional):  Maximum number of iterations to run the value-iteration loop. Iteration stops earlier if convergence (measured by the maximum absolute change in the value function) is achieved. Default 100.
         - tol (float, optional):  Convergence tolerance for the value function: stop when max_i |V_new[i] - V_old[i]| < tol. Default 1e-3.
+        - normalization  (bool, optional) : If True, conditional probabilities over discretized next-level bins (given survival) are normalized to sum to 1. Default True.
 
         Returns:
         - policy (numpy.ndarray).
         - V (numpy.ndarray): The value function associated with `policy`.
         '''
-        from scipy.stats import norm
-        V = np.zeros(self.n_states)
+        V = np.zeros(self.n_state)
+        trans_probs = np.empty(self.m + 1)
+        next_indices = np.empty(self.m + 1, dtype=int)
+        next_indices[0] = 0
+        # Shared computation results
         lk_indices = np.arange(self.m)
-        L = self.l_index2l(lk_indices)
-        L_lag = L - self.delta
-        failure_probs = self.predict_failure(L)
+        L_vec = self.l_index2l(lk_indices)
+        L_lag_vec = L_vec - self.delta
+        failure_prob_vec = self.predict_failure(L_vec)
         for _ in range(max_iter):
             V_pre = V.copy()
             policy = (self.m - 1) * np.ones(self.k_max,dtype=int)
@@ -640,12 +688,14 @@ class My_MDP:
 
             # Initial state - do nothing
             failure_prob = self.predict_failure(0)
-            trans_probs = np.empty(self.m + 1)
             trans_probs[0] = failure_prob
             L_mu, L_sigma_square = self.gen_L_dist(0,self.mu0,self.sigma0_square)
             L_sigma = L_sigma_square**0.5
-            trans_probs[1:] = (norm.cdf(L,loc=L_mu,scale=L_sigma) - norm.cdf(L_lag,loc=L_mu,scale=L_sigma)) * (1 - failure_prob)
-            next_indices = np.arange(self.m + 1)
+            evlv_p = norm.cdf(L_vec,loc=L_mu,scale=L_sigma) - norm.cdf(L_lag_vec,loc=L_mu,scale=L_sigma)
+            if normalization:
+                evlv_p /= evlv_p.sum()
+            trans_probs[1:] = evlv_p * (1 - failure_prob)
+            next_indices[1:] = self.state2index(0,lk_indices)
             V[0] = failure_prob * self.c2 + (1 - failure_prob) * self.c3 + self.gamma * trans_probs @ V[next_indices]
 
             # k_idx = 0, ..., k_max - 1
@@ -653,20 +703,23 @@ class My_MDP:
             for k_idx in range(self.k_max):
                 k = k_idx + 1
                 for lk_idx in range(self.m):
-                    # lk <= theshold
+                    # lk <= CL
                     cur_state_index = self.state2index(k_idx, lk_idx)
                     if lk_idx >= policy[k_idx]:
                         # Preventive replacement
                         V[cur_state_index] = rp_cost
                     else:
                         # Decide whether to perform preventive replacement
-                        failure_prob = failure_probs[lk_idx]
+                        failure_prob = failure_prob_vec[lk_idx]
                         trans_probs[0] = failure_prob
-                        lk = L[lk_idx]
+                        lk = L_vec[lk_idx]
                         mu1,sigma1_square = self.gen_posterior_dist(k, lk)
                         L_mu, L_sigma_square = self.gen_L_dist(lk, mu1, sigma1_square)
                         L_sigma = L_sigma_square**0.5
-                        trans_probs[1:] = (norm.cdf(L,loc=L_mu,scale=L_sigma) - norm.cdf(L_lag,loc=L_mu,scale=L_sigma)) * (1 - failure_prob)
+                        evlv_p = norm.cdf(L_vec,loc=L_mu,scale=L_sigma) - norm.cdf(L_lag_vec,loc=L_mu,scale=L_sigma)
+                        if normalization:
+                            evlv_p /= evlv_p.sum()
+                        trans_probs[1:] = evlv_p * (1 - failure_prob)
                         next_indices[1:] = self.state2index(k, lk_indices)
                         ob_cost = failure_prob * self.c2 + (1 - failure_prob) * self.c3 + self.gamma * trans_probs @ V[next_indices]
                         if ob_cost > rp_cost:
@@ -674,6 +727,454 @@ class My_MDP:
                             V[cur_state_index] = rp_cost
                         else:
                             V[cur_state_index] = ob_cost
+            if np.max(np.abs(V - V_pre)) < tol:
+                break
+        return policy, V
+
+
+
+# class My_MDP_Oracle(My_MDP):
+#     '''
+#     An "oracle" subclass of My_MDP that knows the latent drift parameter theta and provides concrete implementations to generate the transition probability matrix and reward vector for a control limit policy, as well as to perform synchronous value iteration.
+#     '''
+#     def __init__(self, theta: float,**kwargs):
+#         super().__init__(mu0=0, sigma0_square=0,**kwargs)
+#         self.theta = theta # Given drift parameter
+
+#     def gen_P_R(self, policy):
+#         '''
+#         Generate transition probability matrix P and reward vector R given a control limit policy.
+        
+#         Args:
+#         - policy (int): Control Limit (CL), which should be in the range [0, m - 1] and determines whether to "do nothing" (l_k < CL) or "preventive replace" (l_k >= CL) for each k.
+
+#         Returns:
+#         - P (scipy.sparse.csr_array).
+#         - R (numpy.ndarray).
+
+#         Notes:
+#         - The method assumes that states are enumerated in a consistent flattened indexing scheme provided by `self.state2index`.
+#         - Numerical precision of the normal CDF and floating point summation may cause row sums to deviate from exactly 1; if strict stochasticity is required, a row-normalization post-processing step may be applied.
+#         - The implementation is optimized to pre-allocate nnz entries and fill CSR arrays incrementally; ensure nnz computation matches the policy and state-space sizes.
+#         '''
+#         # Generate R
+#             # Preventive replacement costs (c1, remain to be covered)
+#         R = self.c1 * np.ones(self.n_state)
+#             # Expected costs for "do nothing" (p*c2 + (1-p)*c3). Note that 0 < k < k_max
+#         repeated_k_indice = np.repeat(np.arange(self.k_max - 1), policy)
+#         lk_indices = np.tile(np.arange(policy),self.k_max - 1)
+#         ob_indices = self.state2index(repeated_k_indice,lk_indices)
+#         failure_prob_vec = self.predict_failure(self.l_index2l(lk_indices))
+#         R[ob_indices] = failure_prob_vec * self.c2 + (1 - failure_prob_vec) * self.c3
+#         failure_prob = self.predict_failure(0)
+#         R[0] = failure_prob * self.c2 + (1 - failure_prob) * self.c3
+
+#         # Construct sparse P (CSR)
+#             # Calculate nnz (Number of Non-Zero entries)
+#         n_ob = (1 + policy * (self.k_max - 1)) * (self.m + 1) # States such that lk < lk* for all k
+#         n_rp = (self.m - policy) * (self.k_max - 1) + self.m # All states such that lk >= lk* for all k
+#         nnz = n_ob + n_rp
+#             # Pre-allocate necessary lists
+#         csr_values, csr_row_indices, csr_col_indices = np.empty(nnz), np.empty(nnz, dtype=int), np.empty(nnz, dtype=int)
+
+#         # Calculate transition probabilities
+#             # Shared computation results
+#         lk_indices = np.arange(self.m)
+#         L_vec = self.l_index2l(lk_indices) # Covering range of lk
+#         L_lag_vec = L_vec - self.delta
+#         failure_prob_vec = self.predict_failure(L_vec)
+#         L_mu_vec, L_sigma_square = self.gen_L_dist(L_vec)
+#         L_sigma = L_sigma_square**0.5
+#         evlv_p_arr = np.vstack([norm.cdf(L_vec,loc=L_mu,scale=L_sigma) - norm.cdf(L_lag_vec,loc=L_mu,scale=L_sigma) for L_mu in L_mu_vec]) * (1 - failure_prob_vec).reshape(-1,1) # Probabilities of lk evolves to L and does not fail
+#             # Initial state - do nothing
+#         p_start = 0 # Pointer operation
+#         csr_values[p_start] = failure_prob # Calculated when generating R
+#         csr_col_indices[p_start] = 0
+#         L_mu = self.theta * self.t
+#         p_end = p_start + self.m + 1
+#         csr_row_indices[p_start:p_end] = 0
+#         p_start += 1
+#         csr_values[p_start:p_end] = (norm.cdf(L_vec,loc=L_mu,scale=L_sigma) - norm.cdf(L_lag_vec,loc=L_mu,scale=L_sigma)) * (1 - failure_prob)
+#         csr_col_indices[p_start:p_end] = self.state2index(0,lk_indices)
+#             # k_idx = 0, ..., k_max - 1
+#         for k_idx in range(self.k_max - 1):
+#             k = k_idx + 1
+#             for lk_idx in range(self.m):
+#                 p_start = p_end
+#                 cur_state_index = self.state2index(k_idx, lk_idx)
+#                 if lk_idx < policy and k < self.k_max: # Do nothing
+#                     csr_values[p_start] = failure_prob_vec[lk_idx]
+#                     csr_col_indices[p_start] = 0
+#                     p_end = p_start + self.m + 1
+#                     csr_row_indices[p_start:p_end] = cur_state_index
+#                     p_start += 1
+#                     csr_values[p_start:p_end] = evlv_p_arr[lk_idx]
+#                     csr_col_indices[p_start:p_end] = self.state2index(k,lk_indices)
+#                 else: # Replace
+#                     csr_values[p_start] = 1.
+#                     csr_row_indices[p_start] = cur_state_index
+#                     csr_col_indices[p_start] = 0
+#                     p_end += 1
+#         P = csr_array((csr_values,(csr_row_indices, csr_col_indices)),shape=(self.n_state,self.n_state))
+#         return P, R
+
+#     def gen_L_dist(self, l):
+#         L_mu = l + self.theta * self.t
+#         L_sigma_square = self.sigma_square*self.t
+#         return L_mu, L_sigma_square
+
+#     def policy_iteration(self,policy=None,max_iter=10):
+#         '''
+#         Perform policy iteration to compute an optimal policy for this MDP. This method runs iterative policy evaluation followed by policy improvement until the policy converges or a maximum number of iterations is reached.
+
+#         Args:
+#         - policy (int, optional): Initial policy to start iteration from. Default m - 1. 
+#         - max_iter (int, optional):  Maximum number of policy-iteration cycles to perform. Default 10. Iteration stops early if the policy becomes stable.
+
+#         Returns:
+#         - policy (int).
+#         - V (numpy.ndarray): The value function associated with `policy`, as returned by `self.policy_evaluation`.
+#         - P (scipy.sparse.csr_array): Transition probability matrix returned by `self.policy_evaluation`.
+#         - R (numpy.ndarray): Reward vector returned by `self.policy_evaluation`.
+
+#         Notes:
+#         - Internally, a `direction` is passed to `self.policy_improvement` across iterations to accelerate updates by considering structured properties of optimal policy.
+
+#         References:
+#         - This algorithm follows Appendix A in the literature "Alaa H. Elwany, Nagi Z. Gebraeel, Lisa M. Maillart, (2011) Structured Replacement Policies for Components with Complex Degradation Processes and Dedicated Sensors. Operations Research 59(3):684-695."
+#         '''
+#         if policy is None:
+#             policy = self.m - 1
+#         direction = None
+#         for _ in range(max_iter):
+#             V, P, R = self.policy_evaluation(policy)
+#             policy, direction = self.policy_improvement(policy, V, P, R, direction)
+#             if direction == 'done':
+#                 break
+#         return policy, V, P, R
+
+#     def policy_improvement(self, policy, V, P, R, direction = None):
+#         rp_cost = self.c1 + self.gamma * V[0]
+#         ob_costs = R + self.gamma * P@V
+#         for k_idx in range(self.k_max - 1):
+#             if direction != 'down' and  policy < self.m - 1: # 'up' or None -> Try to shift CL upwards
+#                 cur_state_index = self.state2index(k_idx, policy)
+#                 ob_cost = ob_costs[cur_state_index]
+#                 if ob_cost < rp_cost: # Shift
+#                     policy += 1
+#                     direction = 'up'
+#                     return policy, direction
+#                 elif direction == 'up':
+#                     direction = 'done'
+#                     return policy, direction
+#             if direction != 'up' and policy > 0: # 'down' or None -> Try to shift CL downwards
+#                 cur_state_index = self.state2index(k_idx, policy - 1)
+#                 ob_cost = ob_costs[cur_state_index]
+#                 if ob_cost > rp_cost: # Shift
+#                     policy -= 1
+#                     direction = 'down'
+#                     return policy, direction
+#                 elif direction == 'down':
+#                     direction = 'done'
+#                     return policy, direction
+#         direction = 'done'
+#         return policy, direction
+
+#     def value_iteration(self,max_iter=100,tol=1e-3):
+#         '''
+#         Perform synchronous value iteration to compute an optimal preventive-replacement policy.
+
+#         Args:
+#         - max_iter (int, optional):  Maximum number of iterations to run the value-iteration loop. Iteration stops earlier if convergence (measured by the maximum absolute change in the value function) is achieved. Default 100.
+#         - tol (float, optional):  Convergence tolerance for the value function: stop when max_i |V_new[i] - V_old[i]| < tol. Default 1e-3.
+
+#         Returns:
+#         - policy (int).
+#         - V (numpy.ndarray): The value function associated with `policy`.
+#         '''
+#         V = np.zeros(self.n_state)
+#         trans_probs = np.empty(self.m + 1)
+#         next_indices = np.empty(self.m + 1, dtype=int)
+#         next_indices[0] = 0
+#         # Shared computation results
+#         lk_indices = np.arange(self.m)
+#         L_vec = self.l_index2l(lk_indices)
+#         L_lag_vec = L_vec - self.delta
+#         failure_prob_vec = self.predict_failure(L_vec)
+#         L_mu_vec, L_sigma_square = self.gen_L_dist(L_vec)
+#         L_sigma = L_sigma_square**0.5
+#         evlv_p_arr = np.vstack([norm.cdf(L_vec,loc=L_mu,scale=L_sigma) - norm.cdf(L_lag_vec,loc=L_mu,scale=L_sigma) for L_mu in L_mu_vec]) * (1 - failure_prob_vec).reshape(-1,1) # Probabilities of lk evolves to L and does not fail.
+#         for _ in range(max_iter):
+#             V_pre = V.copy()
+#             policy = self.m - 1
+
+#             # Initial state - do nothing
+#             failure_prob = self.predict_failure(0)
+#             trans_probs[0] = failure_prob
+#             L_mu = self.theta * self.t
+#             trans_probs[1:] = (norm.cdf(L_vec,loc=L_mu,scale=L_sigma) - norm.cdf(L_lag_vec,loc=L_mu,scale=L_sigma)) * (1 - failure_prob)
+#             next_indices[1:] = self.state2index(0,lk_indices)
+#             V[0] = failure_prob * self.c2 + (1 - failure_prob) * self.c3 + self.gamma * trans_probs @ V[next_indices]
+
+#             # k_idx = 0, ..., k_max - 1
+#             rp_cost = self.c1 + self.gamma * V[0] # (Preventive) replacement cost
+#             for k_idx in range(self.k_max):
+#                 k = k_idx + 1
+#                 for lk_idx in range(self.m):
+#                     # lk <= CL
+#                     cur_state_index = self.state2index(k_idx, lk_idx)
+#                     if lk_idx >= policy or k == self.k_max:
+#                         # Preventive replacement
+#                         V[cur_state_index] = rp_cost
+#                     else:
+#                         # Decide whether to perform preventive replacement
+#                         failure_prob = failure_prob_vec[lk_idx]
+#                         trans_probs[0] = failure_prob
+#                         trans_probs[1:] = evlv_p_arr[lk_idx]
+#                         next_indices[1:] = self.state2index(k, lk_indices)
+#                         ob_cost = failure_prob * self.c2 + (1 - failure_prob) * self.c3 + self.gamma * trans_probs @ V[next_indices]
+#                         if ob_cost > rp_cost:
+#                             policy = lk_idx
+#                             V[cur_state_index] = rp_cost
+#                         else:
+#                             V[cur_state_index] = ob_cost
+#             if np.max(np.abs(V - V_pre)) < tol:
+#                 break
+#         return policy, V
+
+
+
+class My_MDP_Oracle:
+    '''
+    An "oracle" version of My_MDP that knows the latent drift parameter theta and provides concrete implementations to generate the transition probability matrix and reward vector for a control limit policy, as well as to perform synchronous value iteration.
+    '''
+    def __init__(self, k_max: int, l_min: float, l_max: float, m: int,
+        c1: float, c2: float, c3: float, gamma: float,
+        theta: float, sigma_square: float,
+        t: int = 1, C1: float = 6.2, C2: float = -0.1):
+        # State space
+        self.k_max = k_max
+        self.l_min = l_min
+        self.l_max = l_max
+        self.m = m
+        self.delta = (l_max - l_min) / m
+        self.n_state = m + 1
+
+        # Rewards
+        self.c1 = c1
+        self.c2 = c2
+        self.c3 = c3
+        self.gamma = gamma
+
+        # Transition Probabilities
+        self.theta = theta
+        self.sigma_square = sigma_square
+
+        self.t = t # The constant time between two consecutive observations
+        self.C1 = C1
+        self.C2 = C2 - l_min
+
+    def hi2l(self,hi):
+        r'''
+        Transform from Health Index (hi \in (-\infinity, +\infinity)) to degradation signal (l \in [0, +\infinity)).
+        hi can be an array.
+        '''
+        return np.log(hi + self.C1) + self.C2
+
+    def l2hi(self,l):
+        r'''
+        Inverse transform from degradation signal (l \in [0, +\infinity)) to Health Index (hi \in (-\infinity, +\infinity)).
+        l can be an array.
+        '''
+        return -self.C1 + np.exp(np.clip(l, a_min = self.l_min, a_max = self.l_max) - self.C2)
+
+    def l2l_index(self,l):
+        '''
+        Discretize degradation signal (l) to degradation signal index (l_idx).
+        l can be an array.
+        '''
+        return l//self.delta
+    
+    def l_index2l(self, l_idx):
+        '''
+        Remap degradation signal index (l_idx) to degradation signal (l).
+        l_idx can be an array.
+        '''
+        return l_idx * self.delta
+
+    def gen_P_R(self, policy, normalization = True):
+        '''
+        Generate transition probability matrix P and reward vector R given a control limit policy.
+        
+        Args:
+        - policy (int): Control Limit (CL), which should be in the range [0, m - 1] and determines whether to "do nothing" (l < CL) or "preventive replace" (l >= CL).
+        - normalization  (bool, optional) : If True, conditional probabilities over discretized next-level bins (given survival) are normalized to sum to 1. Default True.
+
+        Returns:
+        - P (numpy.ndarray).
+        - R (numpy.ndarray).
+
+        Notes:
+        - Numerical precision of the normal CDF and floating point summation may cause row sums to deviate from exactly 1; the `normalization` flag enables re-normalizing each row's survival-probability vector.
+        '''
+        # Shared computation results
+        l_indices = np.arange(self.n_state)
+        rp_bool = l_indices >= policy
+        ob_indices = l_indices[~rp_bool]
+        rp_indices = l_indices[rp_bool]
+        ob_l_vec = self.l_index2l(ob_indices)
+        failure_prob_vec = self.predict_failure(ob_l_vec)
+        L_mu_vec, L_sigma_square = self.gen_L_dist(ob_l_vec)
+        L_vec = self.l_index2l(l_indices[1:]) # Drop initial state
+        L_lag_vec = self.l_index2l(l_indices[1:] - 1)
+        L_sigma = L_sigma_square**0.5
+
+        # Generate R
+        R = np.empty(self.n_state)
+            # Preventive replacement costs
+        R[rp_indices] = self.c1
+            # Expected costs for "do nothing" (p*c2 + (1-p)*c3)
+        R[ob_indices] = failure_prob_vec * (self.c2 - self.c3) + self.c3
+
+        # Generate P
+        P = np.zeros((self.n_state, self.n_state))
+            # Initial state - do nothing
+        P[ob_indices,0] = failure_prob_vec
+            # l_idx = 1, ..., m
+        evlv_p = np.vstack([norm.cdf(L_vec,loc=L_mu,scale=L_sigma) - norm.cdf(L_lag_vec,loc=L_mu,scale=L_sigma) for L_mu in L_mu_vec])
+        if normalization:
+            evlv_p /= evlv_p.sum(axis=1)
+        P[ob_indices,1:] = evlv_p * (1 - failure_prob_vec).reshape(-1,1) # Probabilities of l evolves to L and does not fail
+        P[rp_indices,0] = 1
+        return P, R
+
+    def gen_L_dist(self, l):
+        L_mu = l + self.theta * self.t
+        L_sigma_square = self.sigma_square*self.t
+        return L_mu, L_sigma_square
+
+    def predict_failure(self, l):
+        '''
+        Failure probability at next epoch.
+        '''
+        # Reverse log transformation
+        hi = self.l2hi(l)
+        # Sigmoid function
+        p = np.where(
+            hi >= 0,
+            1 / (1 + np.exp(-hi)),
+            np.exp(hi) / (1 + np.exp(hi))
+        )
+        return p
+
+    def policy_iteration(self, policy=None, max_iter=10):
+        '''
+        Perform policy iteration to compute an optimal policy for this MDP. This method runs iterative policy evaluation followed by policy improvement until the policy converges or a maximum number of iterations is reached.
+
+        Args:
+        - policy (int, optional): Initial policy to start iteration from. Default m - 1. 
+        - max_iter (int, optional):  Maximum number of policy-iteration cycles to perform. Default 10. Iteration stops early if the policy becomes stable.
+
+        Returns:
+        - policy (int).
+        - V (numpy.ndarray): The value function associated with `policy`, as returned by `self.policy_evaluation`.
+        - P (numpy.ndarray): Transition probability matrix returned by `self.policy_evaluation`.
+        - R (numpy.ndarray): Reward vector returned by `self.policy_evaluation`.
+
+        Notes:
+        - Internally, a `direction` is passed to `self.policy_improvement` across iterations to accelerate updates by considering structured properties of optimal policy.
+
+        References:
+        - This algorithm follows Appendix A in the literature "Alaa H. Elwany, Nagi Z. Gebraeel, Lisa M. Maillart, (2011) Structured Replacement Policies for Components with Complex Degradation Processes and Dedicated Sensors. Operations Research 59(3):684-695."
+        '''
+        if policy is None:
+            policy = self.m
+        direction = None
+        for _ in range(max_iter):
+            V, P, R = self.policy_evaluation(policy)
+            policy, direction = self.policy_improvement(policy, V, P, R, direction)
+            if direction == 'done':
+                break
+        return policy, V, P, R
+
+    def policy_evaluation(self, policy):
+        P, R = self.gen_P_R(policy)
+        V = np.linalg.solve(np.eye(self.n_state) - self.gamma * P, R)
+        return V, P, R
+
+    def policy_improvement(self, policy, V, P, R, direction = None):
+        rp_cost = self.c1 + self.gamma * V[0]
+        ob_costs = R + self.gamma * P@V
+        if direction != 'down' and  policy < self.m: # 'up' or None -> Try to shift CL upwards
+            ob_cost = ob_costs[policy]
+            if ob_cost < rp_cost: # Shift
+                policy += 1
+                direction = 'up'
+                return policy, direction
+            elif direction == 'up':
+                direction = 'done'
+                return policy, direction
+        if direction != 'up' and policy > 1: # 'down' or None -> Try to shift CL downwards
+            ob_cost = ob_costs[policy-1]
+            if ob_cost > rp_cost: # Shift
+                policy -= 1
+                direction = 'down'
+                return policy, direction
+            elif direction == 'down':
+                direction = 'done'
+                return policy, direction
+        direction = 'done'
+        return policy, direction
+
+    def value_iteration(self, max_iter=100, tol=1e-3, normalization = True):
+        '''
+        Perform synchronous value iteration to compute an optimal preventive-replacement policy.
+
+        Args:
+        - max_iter (int, optional):  Maximum number of iterations to run the value-iteration loop. Iteration stops earlier if convergence (measured by the maximum absolute change in the value function) is achieved. Default 100.
+        - tol (float, optional):  Convergence tolerance for the value function: stop when max_i |V_new[i] - V_old[i]| < tol. Default 1e-3.
+        - normalization  (bool, optional) : If True, conditional probabilities over discretized next-level bins (given survival)are normalized to sum to 1. Default True.
+
+        Returns:
+        - policy (int).
+        - V (numpy.ndarray): The value function associated with `policy`.
+        '''
+        V = np.zeros(self.n_state)
+        trans_probs = np.empty(self.n_state)
+        # Shared computation results
+        l_indices = np.arange(self.n_state)
+        l_vec = self.l_index2l(l_indices)
+        L_indices = l_indices[1:]
+        L_vec = self.l_index2l(L_indices)
+        L_lag_vec = self.l_index2l(L_indices - 1)
+        failure_prob_vec = self.predict_failure(l_vec)
+        L_mu_vec, L_sigma_square = self.gen_L_dist(l_vec)
+        L_sigma = L_sigma_square**0.5
+        evlv_p_arr = np.vstack([norm.cdf(L_vec,loc=L_mu,scale=L_sigma) - norm.cdf(L_lag_vec,loc=L_mu,scale=L_sigma) for L_mu in L_mu_vec])
+        if normalization:
+            evlv_p_arr /= evlv_p_arr.sum(axis=1)
+        evlv_p_arr = evlv_p_arr * (1 - failure_prob_vec).reshape(-1,1) # Probabilities of l evolves to L and does not fail.
+        for _ in range(max_iter):
+            V_pre = V.copy()
+            policy = self.m
+
+            rp_cost = self.c1 + self.gamma * V[0]
+            for l_idx in l_indices:
+                # l <= CL
+                if l_idx >= policy:
+                    # Preventive replacement
+                    V[l_idx] = self.c1 + self.gamma * V[0]
+                else:
+                    # Decide whether to perform preventive replacement
+                    failure_prob = failure_prob_vec[l_idx]
+                    ob_cost = failure_prob * self.c2 + (1 - failure_prob) * self.c3 + \
+                        self.gamma * (failure_prob * V[0] + evlv_p_arr[l_idx] @ V[L_indices])
+                    if ob_cost > rp_cost:
+                        policy = l_idx
+                        V[l_idx:] = rp_cost
+                        break
+                    else:
+                        V[l_idx] = ob_cost
             if np.max(np.abs(V - V_pre)) < tol:
                 break
         return policy, V
