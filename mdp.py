@@ -100,7 +100,7 @@ class OR_MDP:
         
         Args:
         - policy (array-like of int): Each element should be in the range [0, m - 1]. The policy determine whether to "do nothing" (l_k < l_k*) or "replace" (l_k >= l_k*) for each k.
-        - normalization  (bool, optional) : If True, conditional probabilities over discretized next-level bins (given survival)are normalized to sum to 1. Default True.
+        - normalization (bool, optional): If True, conditional probabilities over discretized next-level bins (given survival)are normalized to sum to 1. Default True.
 
         Returns:
         - P (scipy.sparse.csr_array).
@@ -308,7 +308,7 @@ class OR_MDP:
         Args:
         - max_iter (int, optional):  Maximum number of iterations to run the value-iteration loop. Iteration stops earlier if convergence (measured by the maximum absolute change in the value function) is achieved. Default 100.
         - tol (float, optional):  Convergence tolerance for the value function: stop when max_i |V_new[i] - V_old[i]| < tol. Default 1e-3.
-        - normalization  (bool, optional) : If True, conditional probabilities over discretized next-level bins (given survival)are normalized to sum to 1. Default True.
+        - normalization (bool, optional): If True, conditional probabilities over discretized next-level bins (given survival)are normalized to sum to 1. Default True.
 
         Returns:
         - policy (numpy.ndarray).
@@ -368,6 +368,7 @@ class OR_MDP:
             if np.max(np.abs(V - V_pre)) < tol:
                 break
         return policy, V
+
 
 
 class My_MDP:
@@ -460,7 +461,7 @@ class My_MDP:
         
         Args:
         - policy (array-like of int): Each element should be in the range [0, m - 1]. The policy determine whether to "do nothing" (l_k < l_k*) or "preventive replace" (l_k >= l_k*) for each k.
-        - normalization  (bool, optional) : If True, conditional probabilities over discretized next-level bins (given survival) are normalized to sum to 1. Default True.
+        - normalization (bool, optional): If True, conditional probabilities over discretized next-level bins (given survival) are normalized to sum to 1. Default True.
 
         Returns:
         - P (scipy.sparse.csr_array).
@@ -666,7 +667,7 @@ class My_MDP:
         Args:
         - max_iter (int, optional):  Maximum number of iterations to run the value-iteration loop. Iteration stops earlier if convergence (measured by the maximum absolute change in the value function) is achieved. Default 100.
         - tol (float, optional):  Convergence tolerance for the value function: stop when max_i |V_new[i] - V_old[i]| < tol. Default 1e-3.
-        - normalization  (bool, optional) : If True, conditional probabilities over discretized next-level bins (given survival) are normalized to sum to 1. Default True.
+        - normalization (bool, optional): If True, conditional probabilities over discretized next-level bins (given survival) are normalized to sum to 1. Default True.
 
         Returns:
         - policy (numpy.ndarray).
@@ -730,217 +731,6 @@ class My_MDP:
             if np.max(np.abs(V - V_pre)) < tol:
                 break
         return policy, V
-
-
-
-# class My_MDP_Oracle(My_MDP):
-#     '''
-#     An "oracle" subclass of My_MDP that knows the latent drift parameter theta and provides concrete implementations to generate the transition probability matrix and reward vector for a control limit policy, as well as to perform synchronous value iteration.
-#     '''
-#     def __init__(self, theta: float,**kwargs):
-#         super().__init__(mu0=0, sigma0_square=0,**kwargs)
-#         self.theta = theta # Given drift parameter
-
-#     def gen_P_R(self, policy):
-#         '''
-#         Generate transition probability matrix P and reward vector R given a control limit policy.
-        
-#         Args:
-#         - policy (int): Control Limit (CL), which should be in the range [0, m - 1] and determines whether to "do nothing" (l_k < CL) or "preventive replace" (l_k >= CL) for each k.
-
-#         Returns:
-#         - P (scipy.sparse.csr_array).
-#         - R (numpy.ndarray).
-
-#         Notes:
-#         - The method assumes that states are enumerated in a consistent flattened indexing scheme provided by `self.state2index`.
-#         - Numerical precision of the normal CDF and floating point summation may cause row sums to deviate from exactly 1; if strict stochasticity is required, a row-normalization post-processing step may be applied.
-#         - The implementation is optimized to pre-allocate nnz entries and fill CSR arrays incrementally; ensure nnz computation matches the policy and state-space sizes.
-#         '''
-#         # Generate R
-#             # Preventive replacement costs (c1, remain to be covered)
-#         R = self.c1 * np.ones(self.n_state)
-#             # Expected costs for "do nothing" (p*c2 + (1-p)*c3). Note that 0 < k < k_max
-#         repeated_k_indice = np.repeat(np.arange(self.k_max - 1), policy)
-#         lk_indices = np.tile(np.arange(policy),self.k_max - 1)
-#         ob_indices = self.state2index(repeated_k_indice,lk_indices)
-#         failure_prob_vec = self.predict_failure(self.l_index2l(lk_indices))
-#         R[ob_indices] = failure_prob_vec * self.c2 + (1 - failure_prob_vec) * self.c3
-#         failure_prob = self.predict_failure(0)
-#         R[0] = failure_prob * self.c2 + (1 - failure_prob) * self.c3
-
-#         # Construct sparse P (CSR)
-#             # Calculate nnz (Number of Non-Zero entries)
-#         n_ob = (1 + policy * (self.k_max - 1)) * (self.m + 1) # States such that lk < lk* for all k
-#         n_rp = (self.m - policy) * (self.k_max - 1) + self.m # All states such that lk >= lk* for all k
-#         nnz = n_ob + n_rp
-#             # Pre-allocate necessary lists
-#         csr_values, csr_row_indices, csr_col_indices = np.empty(nnz), np.empty(nnz, dtype=int), np.empty(nnz, dtype=int)
-
-#         # Calculate transition probabilities
-#             # Shared computation results
-#         lk_indices = np.arange(self.m)
-#         L_vec = self.l_index2l(lk_indices) # Covering range of lk
-#         L_lag_vec = L_vec - self.delta
-#         failure_prob_vec = self.predict_failure(L_vec)
-#         L_mu_vec, L_sigma_square = self.gen_L_dist(L_vec)
-#         L_sigma = L_sigma_square**0.5
-#         evlv_p_arr = np.vstack([norm.cdf(L_vec,loc=L_mu,scale=L_sigma) - norm.cdf(L_lag_vec,loc=L_mu,scale=L_sigma) for L_mu in L_mu_vec]) * (1 - failure_prob_vec).reshape(-1,1) # Probabilities of lk evolves to L and does not fail
-#             # Initial state - do nothing
-#         p_start = 0 # Pointer operation
-#         csr_values[p_start] = failure_prob # Calculated when generating R
-#         csr_col_indices[p_start] = 0
-#         L_mu = self.theta * self.t
-#         p_end = p_start + self.m + 1
-#         csr_row_indices[p_start:p_end] = 0
-#         p_start += 1
-#         csr_values[p_start:p_end] = (norm.cdf(L_vec,loc=L_mu,scale=L_sigma) - norm.cdf(L_lag_vec,loc=L_mu,scale=L_sigma)) * (1 - failure_prob)
-#         csr_col_indices[p_start:p_end] = self.state2index(0,lk_indices)
-#             # k_idx = 0, ..., k_max - 1
-#         for k_idx in range(self.k_max - 1):
-#             k = k_idx + 1
-#             for lk_idx in range(self.m):
-#                 p_start = p_end
-#                 cur_state_index = self.state2index(k_idx, lk_idx)
-#                 if lk_idx < policy and k < self.k_max: # Do nothing
-#                     csr_values[p_start] = failure_prob_vec[lk_idx]
-#                     csr_col_indices[p_start] = 0
-#                     p_end = p_start + self.m + 1
-#                     csr_row_indices[p_start:p_end] = cur_state_index
-#                     p_start += 1
-#                     csr_values[p_start:p_end] = evlv_p_arr[lk_idx]
-#                     csr_col_indices[p_start:p_end] = self.state2index(k,lk_indices)
-#                 else: # Replace
-#                     csr_values[p_start] = 1.
-#                     csr_row_indices[p_start] = cur_state_index
-#                     csr_col_indices[p_start] = 0
-#                     p_end += 1
-#         P = csr_array((csr_values,(csr_row_indices, csr_col_indices)),shape=(self.n_state,self.n_state))
-#         return P, R
-
-#     def gen_L_dist(self, l):
-#         L_mu = l + self.theta * self.t
-#         L_sigma_square = self.sigma_square*self.t
-#         return L_mu, L_sigma_square
-
-#     def policy_iteration(self,policy=None,max_iter=10):
-#         '''
-#         Perform policy iteration to compute an optimal policy for this MDP. This method runs iterative policy evaluation followed by policy improvement until the policy converges or a maximum number of iterations is reached.
-
-#         Args:
-#         - policy (int, optional): Initial policy to start iteration from. Default m - 1. 
-#         - max_iter (int, optional):  Maximum number of policy-iteration cycles to perform. Default 10. Iteration stops early if the policy becomes stable.
-
-#         Returns:
-#         - policy (int).
-#         - V (numpy.ndarray): The value function associated with `policy`, as returned by `self.policy_evaluation`.
-#         - P (scipy.sparse.csr_array): Transition probability matrix returned by `self.policy_evaluation`.
-#         - R (numpy.ndarray): Reward vector returned by `self.policy_evaluation`.
-
-#         Notes:
-#         - Internally, a `direction` is passed to `self.policy_improvement` across iterations to accelerate updates by considering structured properties of optimal policy.
-
-#         References:
-#         - This algorithm follows Appendix A in the literature "Alaa H. Elwany, Nagi Z. Gebraeel, Lisa M. Maillart, (2011) Structured Replacement Policies for Components with Complex Degradation Processes and Dedicated Sensors. Operations Research 59(3):684-695."
-#         '''
-#         if policy is None:
-#             policy = self.m - 1
-#         direction = None
-#         for _ in range(max_iter):
-#             V, P, R = self.policy_evaluation(policy)
-#             policy, direction = self.policy_improvement(policy, V, P, R, direction)
-#             if direction == 'done':
-#                 break
-#         return policy, V, P, R
-
-#     def policy_improvement(self, policy, V, P, R, direction = None):
-#         rp_cost = self.c1 + self.gamma * V[0]
-#         ob_costs = R + self.gamma * P@V
-#         for k_idx in range(self.k_max - 1):
-#             if direction != 'down' and  policy < self.m - 1: # 'up' or None -> Try to shift CL upwards
-#                 cur_state_index = self.state2index(k_idx, policy)
-#                 ob_cost = ob_costs[cur_state_index]
-#                 if ob_cost < rp_cost: # Shift
-#                     policy += 1
-#                     direction = 'up'
-#                     return policy, direction
-#                 elif direction == 'up':
-#                     direction = 'done'
-#                     return policy, direction
-#             if direction != 'up' and policy > 0: # 'down' or None -> Try to shift CL downwards
-#                 cur_state_index = self.state2index(k_idx, policy - 1)
-#                 ob_cost = ob_costs[cur_state_index]
-#                 if ob_cost > rp_cost: # Shift
-#                     policy -= 1
-#                     direction = 'down'
-#                     return policy, direction
-#                 elif direction == 'down':
-#                     direction = 'done'
-#                     return policy, direction
-#         direction = 'done'
-#         return policy, direction
-
-#     def value_iteration(self,max_iter=100,tol=1e-3):
-#         '''
-#         Perform synchronous value iteration to compute an optimal preventive-replacement policy.
-
-#         Args:
-#         - max_iter (int, optional):  Maximum number of iterations to run the value-iteration loop. Iteration stops earlier if convergence (measured by the maximum absolute change in the value function) is achieved. Default 100.
-#         - tol (float, optional):  Convergence tolerance for the value function: stop when max_i |V_new[i] - V_old[i]| < tol. Default 1e-3.
-
-#         Returns:
-#         - policy (int).
-#         - V (numpy.ndarray): The value function associated with `policy`.
-#         '''
-#         V = np.zeros(self.n_state)
-#         trans_probs = np.empty(self.m + 1)
-#         next_indices = np.empty(self.m + 1, dtype=int)
-#         next_indices[0] = 0
-#         # Shared computation results
-#         lk_indices = np.arange(self.m)
-#         L_vec = self.l_index2l(lk_indices)
-#         L_lag_vec = L_vec - self.delta
-#         failure_prob_vec = self.predict_failure(L_vec)
-#         L_mu_vec, L_sigma_square = self.gen_L_dist(L_vec)
-#         L_sigma = L_sigma_square**0.5
-#         evlv_p_arr = np.vstack([norm.cdf(L_vec,loc=L_mu,scale=L_sigma) - norm.cdf(L_lag_vec,loc=L_mu,scale=L_sigma) for L_mu in L_mu_vec]) * (1 - failure_prob_vec).reshape(-1,1) # Probabilities of lk evolves to L and does not fail.
-#         for _ in range(max_iter):
-#             V_pre = V.copy()
-#             policy = self.m - 1
-
-#             # Initial state - do nothing
-#             failure_prob = self.predict_failure(0)
-#             trans_probs[0] = failure_prob
-#             L_mu = self.theta * self.t
-#             trans_probs[1:] = (norm.cdf(L_vec,loc=L_mu,scale=L_sigma) - norm.cdf(L_lag_vec,loc=L_mu,scale=L_sigma)) * (1 - failure_prob)
-#             next_indices[1:] = self.state2index(0,lk_indices)
-#             V[0] = failure_prob * self.c2 + (1 - failure_prob) * self.c3 + self.gamma * trans_probs @ V[next_indices]
-
-#             # k_idx = 0, ..., k_max - 1
-#             rp_cost = self.c1 + self.gamma * V[0] # (Preventive) replacement cost
-#             for k_idx in range(self.k_max):
-#                 k = k_idx + 1
-#                 for lk_idx in range(self.m):
-#                     # lk <= CL
-#                     cur_state_index = self.state2index(k_idx, lk_idx)
-#                     if lk_idx >= policy or k == self.k_max:
-#                         # Preventive replacement
-#                         V[cur_state_index] = rp_cost
-#                     else:
-#                         # Decide whether to perform preventive replacement
-#                         failure_prob = failure_prob_vec[lk_idx]
-#                         trans_probs[0] = failure_prob
-#                         trans_probs[1:] = evlv_p_arr[lk_idx]
-#                         next_indices[1:] = self.state2index(k, lk_indices)
-#                         ob_cost = failure_prob * self.c2 + (1 - failure_prob) * self.c3 + self.gamma * trans_probs @ V[next_indices]
-#                         if ob_cost > rp_cost:
-#                             policy = lk_idx
-#                             V[cur_state_index] = rp_cost
-#                         else:
-#                             V[cur_state_index] = ob_cost
-#             if np.max(np.abs(V - V_pre)) < tol:
-#                 break
-#         return policy, V
 
 
 
@@ -1008,7 +798,7 @@ class My_MDP_Oracle:
         
         Args:
         - policy (int): Control Limit (CL), which should be in the range [0, m - 1] and determines whether to "do nothing" (l < CL) or "preventive replace" (l >= CL).
-        - normalization  (bool, optional) : If True, conditional probabilities over discretized next-level bins (given survival) are normalized to sum to 1. Default True.
+        - normalization (bool, optional): If True, conditional probabilities over discretized next-level bins (given survival) are normalized to sum to 1. Default True.
 
         Returns:
         - P (numpy.ndarray).
@@ -1043,7 +833,7 @@ class My_MDP_Oracle:
             # l_idx = 1, ..., m
         evlv_p = np.vstack([norm.cdf(L_vec,loc=L_mu,scale=L_sigma) - norm.cdf(L_lag_vec,loc=L_mu,scale=L_sigma) for L_mu in L_mu_vec])
         if normalization:
-            evlv_p /= evlv_p.sum(axis=1)
+            evlv_p /= evlv_p.sum(axis=1, keepdims=True)
         P[ob_indices,1:] = evlv_p * (1 - failure_prob_vec).reshape(-1,1) # Probabilities of l evolves to L and does not fail
         P[rp_indices,0] = 1
         return P, R
@@ -1133,14 +923,13 @@ class My_MDP_Oracle:
         Args:
         - max_iter (int, optional):  Maximum number of iterations to run the value-iteration loop. Iteration stops earlier if convergence (measured by the maximum absolute change in the value function) is achieved. Default 100.
         - tol (float, optional):  Convergence tolerance for the value function: stop when max_i |V_new[i] - V_old[i]| < tol. Default 1e-3.
-        - normalization  (bool, optional) : If True, conditional probabilities over discretized next-level bins (given survival)are normalized to sum to 1. Default True.
+        - normalization (bool, optional): If True, conditional probabilities over discretized next-level bins (given survival)are normalized to sum to 1. Default True.
 
         Returns:
         - policy (int).
         - V (numpy.ndarray): The value function associated with `policy`.
         '''
         V = np.zeros(self.n_state)
-        trans_probs = np.empty(self.n_state)
         # Shared computation results
         l_indices = np.arange(self.n_state)
         l_vec = self.l_index2l(l_indices)
@@ -1152,7 +941,7 @@ class My_MDP_Oracle:
         L_sigma = L_sigma_square**0.5
         evlv_p_arr = np.vstack([norm.cdf(L_vec,loc=L_mu,scale=L_sigma) - norm.cdf(L_lag_vec,loc=L_mu,scale=L_sigma) for L_mu in L_mu_vec])
         if normalization:
-            evlv_p_arr /= evlv_p_arr.sum(axis=1)
+            evlv_p_arr /= evlv_p_arr.sum(axis=1, keepdims=True)
         evlv_p_arr = evlv_p_arr * (1 - failure_prob_vec).reshape(-1,1) # Probabilities of l evolves to L and does not fail.
         for _ in range(max_iter):
             V_pre = V.copy()
