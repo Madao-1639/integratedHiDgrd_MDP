@@ -47,9 +47,9 @@ class HIMappingMixIn_Log:
 
 
 
-class PredictFailureMixIn:
+class PredictFailureMixIn_Sigmoid:
     """
-    A mix-in class providing a method to predict failure based on health index (hi).
+    A mix-in class providing a method to predict failure probability using a sigmoid function, based on health index (hi).
 
     This class is designed to be inherited by MDP classes that require failure prediction functionality.
     """
@@ -57,6 +57,7 @@ class PredictFailureMixIn:
         '''
         Failure probability at next epoch.
         '''
+        hi = hi.clip(-100, 100) # Avoid overflow
         # Sigmoid function
         p = np.where(
             hi >= 0,

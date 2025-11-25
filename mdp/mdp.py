@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from enum import Enum, unique, auto
-from .mixin import HIMappingMixIn_Linear, HIMappingMixIn_Log, PredictFailureMixIn
+from .mixin import HIMappingMixIn_Linear, HIMappingMixIn_Log, PredictFailureMixIn_Sigmoid
 import numpy as np
 from scipy.sparse import csr_array
 from scipy.stats import norm
@@ -101,11 +101,11 @@ class BaseMDP_1D(ABC):
         '''
         if policy is None:
             policy = self.m - 1
-        direction = None
+        _direction = None
         for _ in range(max_iter):
             V, P, R = self.policy_evaluation(policy, **kw_args)
             policy, _direction = self.policy_improvement(policy, V, P, R, _direction)
-            if direction == _Direction.DONE:
+            if _direction == _Direction.DONE:
                 break
         return policy, V, P, R
 
@@ -140,7 +140,7 @@ class BaseMDP_1D(ABC):
 
         Returns:
         - policy (int).
-        - direction (str | None).
+        - _direction (_Direction | None).
         '''
         ...
 
@@ -335,7 +335,7 @@ class OR_MDP(HIMappingMixIn_Linear, BaseMDP_2D):
             # Shared computation results
         lk_indices = np.arange(self.m + 1)
         L_vec = self.l_index2l(lk_indices[:-1]) # Covering range of lk
-        L_lag_vec = L_vec - self.delta
+        L_lag_vec = self.l_index2l(lk_indices[:-1] - 1)
             # Initial state - do nothing
         # mu0_,mu1_,sigma0_square_,sigma1_square_,rho_ = self.gen_posterior_dist(0,0)
         # L_mu, L_sigma_square = self.gen_L_dist(0, mu1_, sigma1_square_)
@@ -476,8 +476,8 @@ class OR_MDP(HIMappingMixIn_Linear, BaseMDP_2D):
         '''
         V = np.zeros(self.n_state)
         lk_indices = np.arange(self.m + 1)
-        L_vec = self.l_index2l(np.arange(self.m))
-        L_lag_vec = L_vec - self.delta
+        L_vec = self.l_index2l(lk_indices[:-1])
+        L_lag_vec = self.l_index2l(lk_indices[:-1] - 1)
         for _ in range(max_iter):
             V_pre = V.copy()
             policy = (self.m - 1) * np.ones(self.k_max,dtype=int)
@@ -531,7 +531,53 @@ class OR_MDP(HIMappingMixIn_Linear, BaseMDP_2D):
 
 
 
-class My_MDP(PredictFailureMixIn, HIMappingMixIn_Log, BaseMDP_2D):
+class OR_MDP_OneParam(OR_MDP):
+    '''
+    One parameter version of OR_MDP, which only retains the drift random-effect parameter (while discarding the random-effect offset) in exponential degradation model.
+    '''
+    def gen_posterior_dist(self, k, lk):
+        '''
+        Compute the posterior distributions of parameters for the 1-parameter Exponential Degradation Model with Brownian Error Terms. This model retains only the drift random-effect parameter (discarding the random-effect offset), resulting in a simplified parameter space compared to the parent class.
+        
+        Args:
+        - k (int).
+        - lk (float).
+
+        Returns:
+        - None: Placeholder for the posterior mean of the random-effect offset (omitted in the 1-parameter model).
+        - mu1 (float): Posterior mean of the drift random-effect parameter.
+        - None: Placeholder for the posterior variance of the random-effect offset (omitted in the 1-parameter model).
+        - sigma1_square (float): Posterior variance of the drift random-effect parameter.
+        - None: Placeholder for the posterior correlation coefficient between parameters (omitted in the 1-parameter model, as there is only one parameter).
+
+        Notes:
+        - The method maintains compatibility with the parent class `OR_MDP`'s `gen_posterior_dist` interface, which returns five values. Since the 1-parameter model omits the random-effect offset and only includes the drift parameter, the unused return positions are filled with `None` to preserve method signature consistency. This allows seamless integration with inherited methods (e.g., `gen_L_dist`) that expect the parent class's return structure.
+        '''
+        sigma1_square = 1/((1/self.sigma0_square)+(k*self.t/self.sigma_square))
+        mu1 = sigma1_square*((self.mu0/self.sigma0_square)+(lk*self.t/self.sigma_square))
+        return None, mu1, None, sigma1_square, None
+
+    def gen_L_dist(self, l, mu1, sigma1_square):
+        '''
+        Compute the predictive distribution of the next degradation signal (L) for the 1-parameter Exponential Degradation Model with Brownian Error Terms after a time interval `t`. This method reuses the parent class's implementation while adapting to the simplified parameter space of the 1-parameter model.
+
+        Args:
+        - l (float): Current observed degradation level (intercept term).
+        - mu1 (float): Posterior mean of the drift random-effect parameter (from the 1-parameter model).
+        - sigma1_square (float): Posterior variance of the drift random-effect parameter (from the 1-parameter model).
+
+        Returns:
+        - L_mu (float): Predictive mean of the next degradation signal L.
+        - L_sigma_square (float): Predictive variance of the next degradation signal L.
+
+        Notes:
+        - The method maintains compatibility with the parent class `OR_MDP`'s `gen_L_dist` interface by accepting parameters corresponding to the drift random-effect parameter and delegating computation to the parent class implementation. This ensures seamless integration with inherited logic (e.g., in `gen_P_R`) that relies on the parent class's return structure, while accommodating the simplified parameterization of the 1-parameter model.
+        '''
+        return super().gen_L_dist(l = l, mu1_= mu1, sigma1_square_ = sigma1_square)
+
+
+
+class My_MDP(PredictFailureMixIn_Sigmoid, HIMappingMixIn_Log, BaseMDP_2D):
     r'''
     MDP of The Single-Unit Sensor-Based Replacement Problem (discretization scheme)
     with failure probability: p = Sigmoid(hi), hi = -C1+exp(l-C2)
@@ -733,7 +779,7 @@ class My_MDP(PredictFailureMixIn, HIMappingMixIn_Log, BaseMDP_2D):
         # Shared computation results
         lk_indices = np.arange(self.m)
         L_vec = self.l_index2l(lk_indices)
-        L_lag_vec = L_vec - self.delta
+        L_lag_vec = self.l_index2l(lk_indices - 1)
         hi_vec = self.l2hi(L_vec)
         failure_prob_vec = self.predict_failure(hi_vec)
         for _ in range(max_iter):
@@ -788,21 +834,13 @@ class My_MDP(PredictFailureMixIn, HIMappingMixIn_Log, BaseMDP_2D):
 
 
 
-class My_MDP_Oracle(PredictFailureMixIn, BaseMDP_1D):
+class My_MDP_Oracle(PredictFailureMixIn_Sigmoid, HIMappingMixIn_Log, BaseMDP_1D):
     '''
-    An "oracle" version of `My_MDP` that knows the latent drift parameter theta and provides concrete implementations to generate the transition probability matrix and reward vector for a control limit policy, as well as to perform synchronous value iteration.
+    An "oracle" version of `My_MDP` that knows the latent drift parameter theta.
     '''
-    def __init__(self, l_min: float, l_max: float, m: int,
-        c1: float, c2: float, c3: float, gamma: float,
-        theta: float, sigma_square: float,
-        t: int = 1, C1: float = 6.2, C2: float = -0.1,
-        **kw_args):
+    def __init__(self, theta: float, sigma_square: float, C1: float = 6.2, C2: float = -0.1, **kw_args):
         # Shared initialization
-        super().__init__(
-            l_min = l_min, l_max = l_max, m = m,
-            c1 = c1, c2 = c2, c3 = c3, gamma = gamma,
-            t = t, **kw_args
-        )
+        super().__init__(**kw_args)
 
         # Transition Probabilities
         self.theta = theta
@@ -810,7 +848,7 @@ class My_MDP_Oracle(PredictFailureMixIn, BaseMDP_1D):
 
         # Other parameters
         self.C1 = C1
-        self.C2 = C2 - l_min
+        self.C2 = C2 - self.l_min
 
     def gen_P_R(self, policy: int, normalization: bool = True) -> tuple[np.ndarray, np.ndarray]:
         '''
