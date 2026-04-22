@@ -19,7 +19,7 @@ class BaseMDP_1D(ABC):
     """Base class for MDPs with 1-dimensional (l) state space."""
     def __init__(self, l_min: float, l_max: float, m: int,
         c1: float, c2: float, c3: float, gamma: float,
-        t: int = 1, **kw_args) -> None:
+        t: int = 1) -> None:
         # State space
         self.l_min = l_min # Minimum degradation signal
         self.l_max = l_max # Maximum degradation signal
@@ -34,7 +34,7 @@ class BaseMDP_1D(ABC):
         self.gamma = gamma # Discount factor
 
         # Transition Probabilities (remain to be defined in subclasses)
-        ...
+        pass
 
         # Other parameters
         self.t = t # The constant time between two consecutive observations
@@ -82,7 +82,7 @@ class BaseMDP_1D(ABC):
         - P (scipy.sparse.csr_array or numpy.ndarray).
         - R (numpy.ndarray).
         '''
-        ...
+        raise NotImplementedError
 
     def policy_iteration(self, policy: int | None = None, max_iter: int = 10, **kw_args) -> tuple[int, np.ndarray, np.ndarray, np.ndarray]:
         '''
@@ -142,8 +142,9 @@ class BaseMDP_1D(ABC):
         - policy (int).
         - _direction (_Direction | None).
         '''
-        ...
+        raise NotImplementedError
 
+    @abstractmethod
     def value_iteration(self, max_iter: int = 100, tol: float = 1e-3, **kw_args) -> tuple[int | np.ndarray, np.ndarray]:
         '''
         Perform synchronous value iteration to compute an optimal preventive-replacement policy.
@@ -251,7 +252,7 @@ class BaseMDP_2D(BaseMDP_1D, ABC):
         - policy (numpy.ndarray).
         - _momentum (list of _Direction | None).
         '''
-        ...
+        raise NotImplementedError
 
 
 
@@ -325,10 +326,10 @@ class OR_MDP(HIMappingMixIn_Linear, BaseMDP_2D):
 
         # Construct sparse P (CSR)
             # Calculate nnz (Number of Non-Zero entries)
-        n_ob = (1 + np.sum(policy)) * (self.m + 1) # One initial state and states such that lk < lk* for all k
+        n_ob = (1 + np.sum(policy)) * (self.m + 1) # One initial state and states such that lk < lk* for all k (np.sum(policy))
         n_rp = np.sum((self.m + 1) - policy) # All states such that lk >= lk* (including failure state) for all k
         nnz = n_ob + n_rp
-            # Pre-allocate necessary lists
+            # Pre-allocate necessary arrays
         csr_values, csr_row_indices, csr_col_indices = np.empty(nnz), np.empty(nnz, dtype=int), np.empty(nnz, dtype=int)
 
         # Calculate transition probabilities
