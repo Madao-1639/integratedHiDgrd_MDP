@@ -273,10 +273,26 @@ class BaseRTFTrainer(BaseTrainer):
         super().after_train_step(epoch, batch_idx, loss)
 
     def model_predict(self, batch):
+        Y_pred, mask = self.model.predict(batch['X'], batch['lengths'])
         return {
-            'Y': self.model.predict(batch['X'], batch['lengths']),
+            'Y': Y_pred,
+            'mask': mask,
         }
 
+    def compute_metrics(self, output, batch):
+        Y_pred, mask = output['Y'], output['mask']
+        Y_pred = Y_pred.masked_select(mask).detach().numpy()
+        Y_true = batch['Y'].masked_select(mask).detach().numpy()
+        precision, recall, f1, _ = precision_recall_fscore_support(
+            Y_true, Y_pred, 
+            average = 'binary', zero_division = 0
+        )
+        return {
+            'Precision': precision,
+            'Recall': recall,
+            'F1': f1,
+        }
+    
     def record_per_epoch(self, epoch):
         self.model.eval()
 

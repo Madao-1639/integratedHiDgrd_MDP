@@ -35,5 +35,5 @@ class Base(nn.Module):
         if not thres:
             thres = self.cls_thres
         p = F.sigmoid(hi)
-        Y_pred = (p >= thres).detach()
+        Y_pred = (p >= thres)
         return Y_pred, mask

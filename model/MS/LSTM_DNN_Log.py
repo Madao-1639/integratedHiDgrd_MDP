@@ -35,3 +35,11 @@ class MS(Base):
             hi = self.hi_transformer(logits[:, self.drop_first:])
             mfe_mask = mfe_mask[:, self.drop_first:]
         return logits, hi, cls_mask, mfe_mask
+    
+    def predict(self, X, lengths, thres=None):
+        logits, hi, cls_mask, mfe_mask = self.forward(X, lengths)
+        if not thres:
+            thres = self.cls_thres
+        p = F.sigmoid(logits)
+        Y_pred = (p >= thres)
+        return Y_pred, cls_mask
