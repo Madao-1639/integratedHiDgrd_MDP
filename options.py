@@ -11,7 +11,6 @@ def parse_common_args(parser):
     parser.add_argument('--num_lstm_layers', type=int, default=1)
     parser.add_argument('--lstm_dropout', type=float, default=0.0)
     parser.add_argument('--dnn_hidden_sizes', nargs='+', type=int, default=[16])
-    parser.add_argument('--activate', type=str, default='Sigmoid', choices=['Sigmoid','SigmoidExpBias','SigmoidLinear','SigmoidLeakyReLU','SigmoidELU'])
     parser.add_argument('--cls_thres', type=float, default=0.5)
         # Multi-Stage
     parser.add_argument('--MS_LLT_c1', type=float, default=8.2, help='Initial shift value of LLT')
@@ -46,7 +45,6 @@ def parse_common_args(parser):
     # I/O
     parser.add_argument('--load_model_fp', type=str, help='Model path for pretrain or test')
     parser.add_argument('--save_suffix', type=str, help='Comment for model')
-    parser.add_argument('--record_HI', type=str, choices = [None,'train','val','all'])
     parser.add_argument('--use_cuda', action='store_true')
     parser.add_argument('--seed', type=int, default=42)
     return parser
@@ -60,6 +58,7 @@ def parse_train_args(parser):
     parser.add_argument('--print_freq', type=int, default=10)
 
     # Optimizer setting
+    parser.add_argument('--optimizer', type=str, default='Adam', choices=['Adam','SGD'])
     parser.add_argument('--lr', type=float, default=1e-3, help='learning rate')
     # parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
     #                     help='momentum for sgd, alpha parameter for adam')

@@ -2,9 +2,13 @@ import pandas as pd
 import numpy as np
 import math
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from utils.registry import SCALER_REGISTRY
+
+SCALER_REGISTRY.register("Standard", StandardScaler)
+SCALER_REGISTRY.register("MinMax", MinMaxScaler)
 
 class LogTransformer:
-    def __init__(self,_delta=1):
+    def __init__(self, _delta = 1):
         self.delta = _delta
     def fit(self,data):
         '''
@@ -15,7 +19,7 @@ class LogTransformer:
         '''
         Apply the logarithmic transformation to data.
         '''
-        return np.log(data+self.phi)
+        return np.log(data + self.phi)
     def fit_transform(self,data):
         '''
         Fit the transformer to the data and then transform it.
@@ -35,16 +39,13 @@ def read_data(data_fp, drop_vars):
     Returns:
         pd.DataFrame: Processed data.
     '''
-    var_cols = list(range(5,26))
-    usecols = [0,1] + var_cols # Drop condition columns
-    dtype_dict = {_:'float32' for _ in var_cols} # Specify dtypes
+    var_cols = [var for var in range(1, 22) if not drop_vars or (drop_vars and var not in drop_vars)] # Filter variables
+    usecols = [0,1] + [var + 4 for var in var_cols] # Drop condition columns
+    dtype_dict = {_:'float64' for _ in var_cols} # Specify dtypes
     dtype_dict[0] = dtype_dict[1] = 'int'
-    data = pd.read_csv(data_fp, usecols=usecols, dtype=dtype_dict, header=None, sep=r'\s+',)
-    columns = ['UUT','time'] + list(range(1,22)) # 21 measurements
-    data.columns = columns
-    if drop_vars is not None: # Filter variables
-        data.drop(drop_vars,axis=1,inplace=True)
-    data.sort_values(['UUT','time'],inplace=True) # Keep order
+    data = pd.read_csv(data_fp, usecols = usecols, dtype = dtype_dict, header = None, sep = r'\s+',)
+    data.columns = ['UUT','time'] + var_cols
+    data.sort_values(['UUT','time'], inplace = True) # Keep order
     return data
 
 def add_noise(data, noise_type = 'gaussian', noise_param = 0.1):
@@ -67,7 +68,7 @@ def add_noise(data, noise_type = 'gaussian', noise_param = 0.1):
     elif noise_type == 'white gaussian': # Add White Gaussian Noise:
         grouped = data.groupby('UUT')
         newdata = []
-        for UUT,sample in grouped:
+        for UUT, sample in grouped:
             px_sqrt = np.sqrt(np.power(sample.loc[:,var_cols].values,2).mean(axis=0))
             pn_sqrt = (px_sqrt*(10**(-noise_param/20.))).reshape(1,-1)
             noise = (pn_sqrt*np.random.randn(len(sample),len(var_cols))).astype('float32')
@@ -85,8 +86,8 @@ def gen_cv_data(data, k_fold = 5):
     for k in range(k_fold):
         val_UUTs = all_UUTs[k*fold_size:(k+1)*fold_size]
         filter_bool = data['UUT'].isin(val_UUTs)
-        train_data = data[~filter_bool]
-        val_data = data[filter_bool]
+        train_data = data[~filter_bool].reset_index(drop=True)
+        val_data = data[filter_bool].reset_index(drop=True)
         yield train_data, val_data
 
 def gen_loo_data(data, val_ratio = 0.2):
@@ -96,16 +97,9 @@ def gen_loo_data(data, val_ratio = 0.2):
             size=int(val_ratio*len(grouped)),
         ) # Stratified random sampling: p=grouped.size()/len(data)
     filter_bool = data['UUT'].isin(val_UUTs)
-    train_data = data[~filter_bool]
-    val_data = data[filter_bool]
+    train_data = data[~filter_bool].reset_index(drop=True)
+    val_data = data[filter_bool].reset_index(drop=True)
     return train_data, val_data
-
-def select_scaler_by_type(scaler_type = 'Standard'):
-    '''Select a scaler based on the given type.'''
-    if scaler_type == 'Standard':
-        return StandardScaler()
-    elif scaler_type == 'MinMax':
-        return MinMaxScaler()
 
 def apply_transformations(args, train_data, val_data=None):
     '''
@@ -125,7 +119,7 @@ def apply_transformations(args, train_data, val_data=None):
             val_data = add_noise(val_data, args.noise_type, args.noise_param)
     var_cols = [col for col in train_data.columns if col not in ('UUT','time','label')]
     if args.scaler_type is not None:
-        scaler = select_scaler_by_type(args.scaler_type)
+        scaler = SCALER_REGISTRY[args.scaler_type]()
         train_data.loc[:,var_cols] = scaler.fit_transform(train_data.loc[:,var_cols])
         if val_data is not None:
             val_data.loc[:,var_cols] = scaler.transform(val_data.loc[:,var_cols])
@@ -170,7 +164,7 @@ def read_preprocess_data(args, data=None):
 def apply_transformations_NoiseAfterScale(args, train_data, val_data = None):
     var_cols = [col for col in train_data.columns if col not in ('UUT','time','label')]
     if args.scaler_type is not None:
-        scaler = select_scaler_by_type(args.scaler_type)
+        scaler = SCALER_REGISTRY[args.scaler_type]()
         train_data.loc[:,var_cols] = scaler.fit_transform(train_data.loc[:,var_cols])
         if val_data is not None:
             val_data.loc[:,var_cols] = scaler.transform(val_data.loc[:,var_cols])

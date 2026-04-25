@@ -1,22 +1,7 @@
-from .trainer import BaseRTFTrainer,BaseTWTrainer,SCTrainer,IntegratedTrainer,MSRTFTrainer#,MSTWTrainer
+from .trainer import TRAINER_REGISTRY
 from utils.preprocessing import read_preprocess_data
 from utils.preprocessing import read_preprocess_data_NoiseAfterScale
 
-def select_trainer_by_type(model_type, data_type=None):
-    if model_type == 'Base':
-        if data_type == 'RTF':
-            return BaseRTFTrainer
-        elif data_type == 'TW':
-            return BaseTWTrainer
-    elif model_type == 'SC':
-        return SCTrainer
-    elif model_type == 'Integrated':
-        return IntegratedTrainer
-    elif model_type == 'MS':
-        if data_type == 'RTF':
-            return MSRTFTrainer
-        # elif data_type == 'TW':
-        #     return MSTWTrainer
 
 def get_trainer(args,data=None,**trainer_kwargs):
     '''
@@ -31,7 +16,7 @@ def get_trainer(args,data=None,**trainer_kwargs):
         For CV, returns a list of trainers for each fold.
         Otherwise, returns a single trainer instance.
     '''
-    Trainer = select_trainer_by_type(args.model_type,args.data_type)
+    Trainer = TRAINER_REGISTRY[args.model_type]
     if args.k_fold > 0:
         return [
             Trainer(args,train_data=train_data,val_data=val_data,**trainer_kwargs)
@@ -42,7 +27,7 @@ def get_trainer(args,data=None,**trainer_kwargs):
         return Trainer(args,train_data=train_data,val_data=val_data,**trainer_kwargs)
 
 def get_trainer_NoiseAfterScale(args,data=None,**trainer_kwargs):
-    Trainer = select_trainer_by_type(args.model_type,args.data_type)
+    Trainer = TRAINER_REGISTRY[args.model_type]
     if args.k_fold > 0:
         return [
             Trainer(args,train_data=train_data,val_data=val_data,**trainer_kwargs) 

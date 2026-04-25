@@ -1,5 +1,11 @@
 import torch
 import torch.nn.functional as F
+from torch import nn
+from torch.optim import Adam, SGD
+from utils.registry import OPTIMIZER_REGISTRY
+
+OPTIMIZER_REGISTRY.register("Adam", Adam)
+OPTIMIZER_REGISTRY.register("SGD", SGD)
 
 def _loss_reduction(loss,reduction: str):
     if reduction == "none":
@@ -14,19 +20,37 @@ def _loss_reduction(loss,reduction: str):
         )
 
 def FocalLoss(
-    y_pred: torch.Tensor,
+    logits: torch.Tensor,
     y_true: torch.Tensor,
     alpha: float = 0.25,
     gamma: float = 2,
     reduction: str = "none",
 ) -> torch.Tensor:
-    ce_loss = F.binary_cross_entropy(y_pred, y_true, reduction="none")
+    ce_loss = F.binary_cross_entropy_with_logits(logits, y_true, reduction="none")
+    y_pred = F.sigmoid(logits)
     p_t = y_pred * y_true + (1 - y_pred) * (1 - y_true)
     loss = ce_loss * ((1 - p_t) ** gamma)
     if 0 < alpha < 1:
         alpha_t = alpha * y_true + (1 - alpha) * (1 - y_true)
         loss = alpha_t * loss
     return _loss_reduction(loss,reduction)
+
+class MFELoss(nn.Module):
+    def __init__(self, n_UUT, mu0=1, sigma0=1, sigma_square=1):
+        super().__init__()
+        # 1ParamBrownian
+        self.theta_train = nn.Parameter(torch.empty(n_UUT).normal_(mu0,sigma0))
+        self.sigma_square = nn.Parameter(torch.FloatTensor([sigma_square]))
+
+    def forward(self, X, indice, reduction = 'mean'):
+        theta = self.theta_train[indice].unsqueeze(1)
+        loss = torch.log(self.sigma_square + 1e-7) + \
+            (X.diff(prepend=torch.zeros(
+                X.shape[0], 1, *X.shape[2:],  # 拼接1列0在序列维度
+                dtype=X.dtype, 
+                device=X.device
+            )) - theta).square()
+        return _loss_reduction(loss, reduction)
 
 def MVFLoss(hi_f,m=1,reduction="none",):
     loss = torch.square(hi_f-m)
