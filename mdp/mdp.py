@@ -1,10 +1,9 @@
 from abc import ABC, abstractmethod
 from enum import Enum, unique, auto
-from .mixin import HIMappingMixIn_Linear, HIMappingMixIn_Log, PredictFailureMixIn_Sigmoid
 import numpy as np
 from scipy.sparse import csr_array
 from scipy.stats import norm
-
+from .degradation import Linear, Exponential
 
 @unique
 class _Direction(Enum):
@@ -17,14 +16,14 @@ class _Direction(Enum):
 
 class BaseMDP_1D(ABC):
     """Base class for MDPs with 1-dimensional (l) state space."""
-    def __init__(self, l_min: float, l_max: float, m: int,
+    def __init__(self, m: int,
         c1: float, c2: float, c3: float, gamma: float,
-        t: int = 1) -> None:
+        t: int = 1,
+        **deg_kwargs) -> None:
         # State space
-        self.l_min = l_min # Minimum degradation signal
-        self.l_max = l_max # Maximum degradation signal
+        self.get_model(**deg_kwargs)
         self.m = m # Number of discretization intervals
-        self.delta = (l_max - l_min) / m # Discretization interval
+        self.delta = self.deg_model.range / m # Discretization interval
         self.n_state = m + 1 # Number of states
 
         # Rewards (costs)
@@ -38,6 +37,9 @@ class BaseMDP_1D(ABC):
 
         # Other parameters
         self.t = t # The constant time between two consecutive observations
+
+    def get_model(self, **deg_kwargs):
+        self.deg_model = Linear(**deg_kwargs)
 
     def l2l_index(self, l):
         '''
@@ -256,7 +258,7 @@ class BaseMDP_2D(BaseMDP_1D, ABC):
 
 
 
-class OR_MDP(HIMappingMixIn_Linear, BaseMDP_2D):
+class OR_MDP(BaseMDP_2D):
     r'''
     Implementation for the literature
     > Alaa H. Elwany, Nagi Z. Gebraeel, Lisa M. Maillart, (2011) Structured Replacement Policies for Components with Complex Degradation Processes and Dedicated Sensors. Operations Research 59(3):684-695.
@@ -277,7 +279,7 @@ class OR_MDP(HIMappingMixIn_Linear, BaseMDP_2D):
         # State space
         super().__init__(**kw_args)
         self.n_state = 1 + self.k_max * (self.m + 1) # Compared to BaseMDP_2D, OR_MDP has one more failure state per epoch
-        self.threshold = self.l_max - self.l_min
+        self.threshold = self.deg_model.range 
 
         # Transition Probabilities
         self.mu0 = mu0 - self.l_min
@@ -578,7 +580,7 @@ class OR_MDP_OneParam(OR_MDP):
 
 
 
-class My_MDP(PredictFailureMixIn_Sigmoid, HIMappingMixIn_Log, BaseMDP_2D):
+class My_MDP(BaseMDP_2D):
     r'''
     MDP of The Single-Unit Sensor-Based Replacement Problem (discretization scheme)
     with failure probability: p = Sigmoid(hi), hi = -C1+exp(l-C2)
@@ -595,17 +597,15 @@ class My_MDP(PredictFailureMixIn_Sigmoid, HIMappingMixIn_Log, BaseMDP_2D):
     '''
     def __init__(self, mu0: float, sigma0_square: float, sigma_square: float,
         C1: float = 6.2, C2: float = -0.1, **kw_args):
-        super().__init__(**kw_args)
+        super().__init__(C1 = C1, C2 = C2 - kw_args['l_min'], **kw_args)
 
         # Transition Probabilities
         self.mu0 = mu0
         self.sigma0_square = sigma0_square
         self.sigma_square = sigma_square
 
-        # Other parameters
-        self.C1 = C1
-        self.C2 = C2 - self.l_min
-
+    def get_model(self, **deg_kwargs):
+        self.deg_model = Exponential(**deg_kwargs)
     def gen_P_R(self, policy: np.ndarray, normalization: bool = True):
         '''
         Generate transition probability matrix P and reward vector R given a control limit policy.
@@ -631,10 +631,10 @@ class My_MDP(PredictFailureMixIn_Sigmoid, HIMappingMixIn_Log, BaseMDP_2D):
         lk_indices = np.concatenate([np.arange(lk_star_index) for lk_star_index in policy])
         ob_indices = self.state2index(repeated_k_indice,lk_indices)
         lk = self.l_index2l(lk_indices)
-        hi = self.l2hi(lk)
-        failure_prob_vec = self.predict_failure(hi)
+        hi = self.deg_model.l2hi(lk)
+        failure_prob_vec = self.deg_model.predict_failure(hi)
         R[ob_indices] = failure_prob_vec * self.c2 + (1 - failure_prob_vec) * self.c3
-        failure_prob = self.predict_failure(self.l2hi(0))
+        failure_prob = self.deg_model.predict_failure(self.deg_model.l2hi(0))
         R[0] = failure_prob * self.c2 + (1 - failure_prob) * self.c3
 
         # Construct sparse P (CSR)
@@ -650,8 +650,8 @@ class My_MDP(PredictFailureMixIn_Sigmoid, HIMappingMixIn_Log, BaseMDP_2D):
         lk_indices = np.arange(self.m)
         L_vec = self.l_index2l(lk_indices) # Covering range of lk
         L_lag_vec = self.l_index2l(lk_indices - 1)
-        hi_vec = self.l2hi(L_vec)
-        failure_prob_vec = self.predict_failure(hi_vec)
+        hi_vec = self.deg_model.l2hi(L_vec)
+        failure_prob_vec = self.deg_model.predict_failure(hi_vec)
             # Initial state - do nothing
         p_start = 0 # Pointer operation
         csr_values[p_start] = failure_prob # Calculated when generating R
@@ -781,15 +781,15 @@ class My_MDP(PredictFailureMixIn_Sigmoid, HIMappingMixIn_Log, BaseMDP_2D):
         lk_indices = np.arange(self.m)
         L_vec = self.l_index2l(lk_indices)
         L_lag_vec = self.l_index2l(lk_indices - 1)
-        hi_vec = self.l2hi(L_vec)
-        failure_prob_vec = self.predict_failure(hi_vec)
+        hi_vec = self.deg_model.l2hi(L_vec)
+        failure_prob_vec = self.deg_model.predict_failure(hi_vec)
         for _ in range(max_iter):
             V_pre = V.copy()
             policy = (self.m - 1) * np.ones(self.k_max,dtype=int)
             policy[-1] = 0 # Always perform a preventive replacement at k = k_max
 
             # Initial state - do nothing
-            failure_prob = self.predict_failure(self.l2hi(0))
+            failure_prob = self.deg_model.predict_failure(self.deg_model.l2hi(0))
             trans_probs[0] = failure_prob
             L_mu, L_sigma_square = self.gen_L_dist(0,self.mu0,self.sigma0_square)
             L_sigma = L_sigma_square**0.5
@@ -835,7 +835,7 @@ class My_MDP(PredictFailureMixIn_Sigmoid, HIMappingMixIn_Log, BaseMDP_2D):
 
 
 
-class My_MDP_Oracle(PredictFailureMixIn_Sigmoid, HIMappingMixIn_Log, BaseMDP_1D):
+class My_MDP_Oracle(BaseMDP_1D):
     '''
     An "oracle" version of `My_MDP` that knows the latent drift parameter theta.
     '''
@@ -872,8 +872,8 @@ class My_MDP_Oracle(PredictFailureMixIn_Sigmoid, HIMappingMixIn_Log, BaseMDP_1D)
         L_lag_vec = self.l_index2l(l_indices - 1)
         ob_l_bool = l_indices < policy
         ob_l_vec = np.concatenate(([0], L_vec[ob_l_bool])) # Prepend initial state (l = 0)
-        ob_hi_vec = self.l2hi(ob_l_vec)
-        failure_prob_vec = self.predict_failure(ob_hi_vec)
+        ob_hi_vec = self.deg_model.l2hi(ob_l_vec)
+        failure_prob_vec = self.deg_model.predict_failure(ob_hi_vec)
         L_mu_vec, L_sigma_square = self.gen_L_dist(ob_l_vec)
         L_sigma = L_sigma_square**0.5
 
@@ -934,8 +934,8 @@ class My_MDP_Oracle(PredictFailureMixIn_Sigmoid, HIMappingMixIn_Log, BaseMDP_1D)
         L_vec = self.l_index2l(l_indices)
         L_lag_vec = self.l_index2l(l_indices - 1)
         l_vec = np.concatenate(([0],L_vec)) # Prepend initial state (l = 0)
-        hi_vec = self.l2hi(l_vec)
-        failure_prob_vec = self.predict_failure(hi_vec)
+        hi_vec = self.deg_model.l2hi(l_vec)
+        failure_prob_vec = self.deg_model.predict_failure(hi_vec)
         L_mu_vec, L_sigma_square = self.gen_L_dist(l_vec)
         L_sigma = L_sigma_square**0.5
         evlv_p_arr = np.vstack([norm.cdf(L_vec,loc=L_mu,scale=L_sigma) - norm.cdf(L_lag_vec,loc=L_mu,scale=L_sigma) for L_mu in L_mu_vec])
