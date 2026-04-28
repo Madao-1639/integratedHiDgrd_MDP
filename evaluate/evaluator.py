@@ -44,7 +44,6 @@ class BaseEvaluator:
     def get_model(self) -> None:
         self.model = torch.load(self.args.load_model_fp, map_location=self.device, weights_only=False)
 
-    @torch.no_grad()
     def evaluate(self) -> dict:
         self.model.eval()
 
@@ -66,7 +65,6 @@ class BaseEvaluator:
         }
         return metric_result
 
-    @torch.no_grad()
     def record(self) -> dict:
         self.model.eval()
         # Record HI
@@ -75,28 +73,32 @@ class BaseEvaluator:
             X = X.to(self.device)
             hi = self.model(X).detach().numpy()
             hi_dict[UUT] = hi
-        return hi_dict
+        return {
+            'HI': hi_dict,
+        }
 
 
 
 class BaseRTFEvaluator(BaseEvaluator):
     '''BaseRTF Model Evaluator'''
 
-    @torch.no_grad()
     def record(self):
         self.model.eval()
 
         # Record HI
         hi_dict = {}
-        for UUT,t,X,y_true in self.record_HI_loader:
+        for UUT, t, X, Y_true in self.record_HI_loader:
             X = X.to(self.device)
-            hi,p = self.model(X)
+            hi, p = self.model(X)
             hi_dict[UUT] = hi.detach().numpy()
 
         # Test for normality
         nt_summary = test4norm(hi_dict)
 
-        return hi_dict, nt_summary
+        return {
+            'hi': hi_dict,
+            'nt_summary': nt_summary,
+        }
 
 
 
@@ -108,20 +110,23 @@ class MSRTFEvaluator(BaseRTFEvaluator):
     #     del self.model.theta_train
     #     super(BaseRTFEvaluator,self).get_model()
 
-    @torch.no_grad()
     def record(self):
         self.model.eval()
 
         # Record HI
+        logits_dict = {}
         hi_dict = {}
-        deg_hi_dict = {}
-        for UUT,t,X,y_true in self.record_HI_loader:
+        for UUT, t, X, Y_true in self.record_HI_loader:
             X = X.to(self.device)
-            hi,p = self.model(X)
-            hi_dict[UUT] = hi.detach().numpy()
-            deg_hi_dict[UUT] = self.model.transform_deg_hi(hi).detach().numpy()
+            logits, p = self.model(X)
+            logits_dict[UUT] = logits.detach().numpy()
+            hi_dict[UUT] = self.model.transform_deg_hi(logits).detach().numpy()
 
         # Test for normality
-        nt_summary = test4norm(deg_hi_dict)
+        nt_summary = test4norm(hi_dict)
 
-        return hi_dict, deg_hi_dict, nt_summary
+        return {
+            'logits': logits_dict,
+            'hi': hi_dict,
+            'nt_summary': nt_summary,
+        }

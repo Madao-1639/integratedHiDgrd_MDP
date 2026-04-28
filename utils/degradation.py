@@ -1,7 +1,6 @@
 import numpy as np
 from mdp import OR_MDP_OneParam, My_MDP, My_MDP_Oracle
 
-
 def get_deg_path(theta: float, sigma_square: float,
     t: int = 1, k_max: int = 400,
     n_sample: int = 1,) -> np.ndarray:
@@ -38,7 +37,7 @@ def get_rp_time(deg_path: np.ndarray, CL: int | np.ndarray) -> np.ndarray:
     rp_time = np.where(rp_path.any(axis=-1), rp_path.argmax(axis=-1) + 1, deg_path.shape[-1])
     return rp_time
 
-def get_fl_time(deg_path: np.ndarray, mdp: My_MDP | My_MDP_Oracle | None = None, threshold: float | None = None) -> np.ndarray:
+def get_fl_time(deg_path: np.ndarray, mdp: My_MDP | None = None, threshold: float | None = None) -> np.ndarray:
     '''
     Determine failure time based on failure probability or threshold.
 
@@ -55,19 +54,19 @@ def get_fl_time(deg_path: np.ndarray, mdp: My_MDP | My_MDP_Oracle | None = None,
     - When there is no failure within k_max epochs, failure time is set to k_max + 1. So forced replacement will not be considered as failure during evaluation. 
     '''
     if mdp is not None:
-        hi_path = mdp.l2hi(deg_path)
-        fl_path = mdp.predict_failure(hi_path)
+        hi_path = mdp.deg_model.l2hi(deg_path)
+        fl_path = mdp.deg_model.predict_failure(hi_path)
         fl_path = np.random.random(fl_path.shape) < fl_path
         fl_time =  np.where(fl_path.any(axis=-1), fl_path.argmax(axis=-1) + 2, deg_path.shape[-1] + 1)
     elif threshold is not None:
         fl_path = deg_path >= threshold
-        fl_time =  np.where(fl_path.any(axis=-1), fl_path.argmax(axis=-1) + 1, deg_path.shape[-1] + 1)
+        fl_time = np.where(fl_path.any(axis=-1), fl_path.argmax(axis=-1) + 1, deg_path.shape[-1] + 1)
     else:
         raise ValueError("Either mdp or threshold must be provided.")
     return fl_time
 
 def eval_path(rp_time: np.ndarray, fl_time: np.ndarray,
-    c1: float, c2: float, c3: float, gamma: float = 0.99, discounted_cost: bool = True):
+    c1: float, c2: float, c3: float, gamma: float = 1.0) -> tuple[np.ndarray, np.ndarray]:
     '''
     Evaluate total (discounted) cost and lifetime based on replacement and failure times.
 
@@ -77,8 +76,7 @@ def eval_path(rp_time: np.ndarray, fl_time: np.ndarray,
     - c1 (float): Cost of preventive replacement.
     - c2 (float): Cost of reactive replacement.
     - c3 (float): Observation cost per time unit.
-    - gamma (float, optional): Discount factor. Default 0.99.
-    - discounted_cost (bool, optional): If True, calculate total discounted cost. Default True.
+    - gamma (float): Discount factor. Default 0.99.
 
     Returns:
     - total_cost (numpy.ndarray): Total cost for each sample path.
@@ -88,10 +86,10 @@ def eval_path(rp_time: np.ndarray, fl_time: np.ndarray,
     lifetime = np.fmin(rp_time, fl_time)
     # Calculate replacement cost (c1 if planned, c2 if failure)
     rp_cost = np.where(rp_time < fl_time, c1, c2)
-    if discounted_cost:
+    if 0 < gamma < 1:
         # Calculate total discounted cost
-        disc_coef = np.power(gamma,lifetime - 1)
-        total_disc_ob_cost = (1-disc_coef)/(1-gamma) * c3
+        disc_coef = np.power(gamma, lifetime - 1)
+        total_disc_ob_cost = (1 - disc_coef) / (1 - gamma) * c3
         disc_rp_cost = disc_coef * (gamma * rp_cost)
         total_disc_cost = total_disc_ob_cost + disc_rp_cost
         return total_disc_cost, lifetime
@@ -107,7 +105,7 @@ def simulate(n_sample: int = 20000, n_theta: int = 3000, force_positive: bool = 
             mdp: My_MDP | None = None, mdp_PI: bool = True,
             or_mdp: OR_MDP_OneParam | None = None, or_mdp_PI: bool = True,
             oracle_mdp: My_MDP_Oracle | None = None, oracle_mdp_PI: bool = True,
-            discounted_cost: bool = True, **mdp_kwargs):
+            **mdp_kwargs):
     r'''
     Simulate cost, lifetime, and cost rate for My_MDP, OR_MDP_OneParam, and My_MDP_Oracle.
 
@@ -191,13 +189,13 @@ def simulate(n_sample: int = 20000, n_theta: int = 3000, force_positive: bool = 
 
         sample_rp_time = get_rp_time(sample_deg_path, CL = CL)
         sample_cost, sample_lifetime = eval_path(rp_time = sample_rp_time, fl_time = sample_fl_time,
-            c1 = c1, c2 = c2, c3 = c3, gamma = gamma, discounted_cost = discounted_cost)
+            c1 = c1, c2 = c2, c3 = c3, gamma = gamma)
         or_sample_rp_time = get_rp_time(sample_deg_path, CL = or_CL)
         or_sample_cost, or_sample_lifetime = eval_path(rp_time = or_sample_rp_time, fl_time = sample_fl_time,
-            c1 = c1, c2 = c2, c3 = c3, gamma = gamma, discounted_cost = discounted_cost)
+            c1 = c1, c2 = c2, c3 = c3, gamma = gamma)
         oracle_sample_rp_time = get_rp_time(sample_deg_path, CL = oracle_CL)
         oracle_sample_cost, oracle_sample_lifetime = eval_path(rp_time = oracle_sample_rp_time, fl_time = sample_fl_time,
-            c1 = c1, c2 = c2, c3 = c3, gamma = gamma, discounted_cost = discounted_cost)
+            c1 = c1, c2 = c2, c3 = c3, gamma = gamma)
 
         avg_cost, avg_lifetime, avg_cost_rate = sample_cost.mean(), sample_lifetime.mean(), (sample_cost/sample_lifetime).mean()
         or_avg_cost, or_avg_lifetime, or_avg_cost_rate = or_sample_cost.mean(), or_sample_lifetime.mean(), (or_sample_cost/or_sample_lifetime).mean()
