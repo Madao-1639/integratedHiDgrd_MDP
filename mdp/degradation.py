@@ -1,9 +1,24 @@
 import numpy as np
 
+
+def _sigmoid(x):
+    x = x.clip(-100, 100) # Avoid overflow
+    # Sigmoid function
+    p = np.where(
+        x >= 0,
+        1 / (1 + np.exp(-x)),
+        np.exp(x) / (1 + np.exp(x))
+    )
+    return p
+
+
+
+
+
 class Linear:
     r'''
     Linear transformation to scale HI to [0, +\infinity).
-    hi = l + l_min
+    hi = l + l_min <==> l = hi - l_min
     '''
     def __init__(self, l_min: float = 0.0, l_max: float = 5.0) -> None:
         # State space
@@ -33,7 +48,7 @@ class Linear:
 class Exponential(Linear):
     r'''
     Logarithmic transformation.
-    hi = log(l + C1) + C2
+    hi = exp(l - C2) - C1 <==> l = log(hi + C1) + C2
     p = sigmoid(hi) = 1 / (1 + exp(-hi))
     '''
     def __init__(self, C1: float = 1.0, C2: float = 0.0, **kw_args) -> None:
@@ -60,14 +75,7 @@ class Exponential(Linear):
         '''
         Failure probability at next epoch.
         '''
-        hi = hi.clip(-100, 100) # Avoid overflow
-        # Sigmoid function
-        p = np.where(
-            hi >= 0,
-            1 / (1 + np.exp(-hi)),
-            np.exp(hi) / (1 + np.exp(hi))
-        )
-        return p
+        return _sigmoid(hi)
 
 
 

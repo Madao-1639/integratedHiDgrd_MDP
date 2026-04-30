@@ -50,11 +50,11 @@ class BaseEvaluator:
         # Classification metrics
         all_y_true = []
         all_y_pred = []
-        for UUT,t,X,y_true in self.val_loader:
+        for UUT,t,X,Y_true in self.val_loader:
             X = X.to(self.device)
-            y_pred = self.model.predict(X)
-            all_y_true.append(y_true)
-            all_y_pred.append(y_pred)
+            Y_pred = self.model.predict(X)
+            all_y_true.append(Y_true)
+            all_y_pred.append(Y_pred)
         all_y_true = np.concatenate(all_y_true)
         all_y_pred = np.concatenate(all_y_pred)
         precision, recall, f1, _ = precision_recall_fscore_support(all_y_true, all_y_pred, average='binary', zero_division=0)
@@ -74,7 +74,7 @@ class BaseEvaluator:
             hi = self.model(X).detach().numpy()
             hi_dict[UUT] = hi
         return {
-            'HI': hi_dict,
+            'hi': hi_dict,
         }
 
 
