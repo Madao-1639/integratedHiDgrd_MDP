@@ -52,6 +52,8 @@ def custom_RTF_collate_fn(batch):
             - batch_Y (list[torch.FloatTensor]): List of converted float tensors for Y.
     ''' 
     batch_UUT, batch_t, batch_X, batch_Y = zip(*batch)
+    lengths = torch.as_tensor([t.shape[0] for t in batch['t']])
+    batch_t = pad_sequence([torch.FloatTensor(t) for t in batch_t], batch_first = True)
     batch_X = pad_sequence([torch.FloatTensor(X) for X in batch_X], batch_first = True)
     batch_Y = pad_sequence([torch.FloatTensor(Y) for Y in batch_Y], batch_first = True)
     return {
@@ -59,4 +61,5 @@ def custom_RTF_collate_fn(batch):
         't': batch_t,
         'X': batch_X,
         'Y': batch_Y,
+        'lengths': lengths,
     }

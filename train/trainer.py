@@ -14,7 +14,7 @@ from utils.data import DATASET_REGISTRY
 from model import MODEL_REGISTRY
 from loss import OPTIMIZER_REGISTRY
 from utils.registry import TRAINER_REGISTRY
-from loss import FocalLoss, MFELoss, MVFLoss, MONLoss, CONLoss
+from loss import FocalLoss, MFELoss_1ParamBrownian, MFELoss_LSTM, MVFLoss, MONLoss, CONLoss
 from utils.logger import Logger
 from utils.utils import test4norm, plot_hi
 
@@ -381,11 +381,12 @@ class BaseRTFTrainer(BaseTrainer):
 
     def get_model(self):
         super().get_model()
-        self.mfe_loss = MFELoss(n_UUT=len(self.ls_dict))
-    
-    def before_train_step(self, batch_idx, batch, meta):
-        super().before_train_step(batch_idx, batch)
-        batch['lengths'] = torch.as_tensor([t.shape[0] for t in batch['t']])
+        self.mfe_loss = MFELoss_1ParamBrownian(n_UUT=len(self.ls_dict))
+
+    def on_train_epoch_start(self, epoch):
+        meta = super().on_train_epoch_start(epoch)
+        self.mfe_loss.train()
+        return meta
 
     def model_forward(self, batch):
         hi, mask = self.model(batch['X'], batch['lengths'])
@@ -412,6 +413,11 @@ class BaseRTFTrainer(BaseTrainer):
     def after_train_step(self, epoch, batch_idx, result, meta):
         self.constrain_parameters()
         super().after_train_step(epoch, batch_idx, result, meta)
+
+    def on_val_epoch_start(self, epoch):
+        meta = super().on_val_epoch_start(epoch)
+        self.mfe_loss.eval()
+        return meta
 
     def model_predict(self, batch):
         Y_pred, mask = self.model.predict(batch['X'], batch['lengths'])
@@ -609,28 +615,47 @@ class SCTrainer(BaseTrainer):
 class IntegratedTrainer(BaseTrainer):
     '''Integrated Model Trainer'''
     
+    def get_model(self):
+        super().get_model()
+        self.mfe_loss = MFELoss_LSTM(n_UUT = len(self.ls_dict),
+                                    lstm_hidden_size = self.args.lstm_hidden_size,
+                                    lstm_num_layers = self.args.lstm_num_layers,
+                                    lstm_dropout = self.args.lstm_dropout)
+
     def on_train_epoch_start(self, epoch, meta):
         meta = super().on_train_epoch_start(epoch)
+        self.mfe_loss.train()
         meta['Y'] = []
         meta['hi'] = []
         return meta
-    
+
     def before_train_step(self, batch_idx, batch, meta):
         super().before_train_step(batch_idx, batch, meta)
-        meta['Y'].append(batch['Y'])
+        mask = torch.arange(batch['X'].shape[1]) < batch['lengths'].unsqueeze(1)
+        batch['mask'] = mask
+        meta['Y'].append(batch['Y'].masked_select(mask))
 
     def model_forward(self, batch):
         return {
-            'hi': self.model(batch['X'])
+            'hi': self.model(batch['X']),
+            'mask': batch['mask'],
         }
 
     def compute_loss(self, output, batch):
-        UUT, t = batch['UUT'], batch['t']
-        hi = output['hi']
+        UUT, t, lengths = batch['UUT'], batch['t'], batch['lengths']
+        hi, mask = output['hi'], output['mask']
+        indices = self._UUT2idx(UUT)
 
-        mfe_loss = self.args.mfe_loss_weight * self.model.mfe_loss(hi, t, UUT, reduction='mean')
-        mvf_loss = self.args.mvf_loss_weight * MVFLoss(hi[-1], self.args.MVFLoss_m, reduction="none")
-        mon_loss = self.args.mon_loss_weight * MONLoss(hi, c=self.args.MONLoss_c, reduction="mean")
+        mfe_loss = self.mfe_loss(hi, t, indices, lengths, reduction='none')
+        mfe_loss = self.args.mfe_loss_weight * mfe_loss.masked_select(mask).mean()
+
+        mvf_loss = self.args.mvf_loss_weight * MVFLoss(hi.gather(1, lengths - 1), self.args.MVFLoss_m, reduction="mean")
+
+        batch_size = hi.shape[0]
+        mon_loss = MONLoss(hi, c=self.args.MONLoss_c, reduction="none") / ((lengths - 1) * batch_size)
+        mon_loss = self.args.mon_loss_weight * mon_loss.masked_select(mask[:, 1:]).sum()
+
+        con_loss = CONLoss(hi, c=self.args.CONLoss_c, reduction="none") / ((lengths - 2) * batch_size)
         con_loss = self.args.con_loss_weight * CONLoss(hi, c=self.args.CONLoss_c, reduction="mean")
 
         total_loss = mfe_loss + mvf_loss + mon_loss + con_loss
@@ -645,10 +670,15 @@ class IntegratedTrainer(BaseTrainer):
     
     def after_train_step(self, epoch, batch_idx, result, meta):
         super().after_train_step(epoch, batch_idx, result, meta)
-        meta['hi'].append(result['output']['hi'].detach())
+        meta['hi'].append(result['output']['hi'].masked_select(result['output']['mask']).detach())
 
     def on_train_epoch_end(self, epoch, meta):
         super().on_train_epoch_end(epoch, meta)
         all_y = torch.concat(meta['Y'])
         all_hi = torch.concat(meta['hi'])
         self.model.fit(all_hi,all_y)
+
+    def on_val_epoch_start(self, epoch):
+        meta = super().on_val_epoch_start(epoch)
+        self.mfe_loss.eval()
+        return meta

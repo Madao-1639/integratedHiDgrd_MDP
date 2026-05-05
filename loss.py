@@ -1,6 +1,7 @@
 import torch
-import torch.nn.functional as F
 from torch import nn
+import torch.nn.functional as F
+from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 from torch.optim import Adam, SGD
 from utils.registry import OPTIMIZER_REGISTRY
 
@@ -35,10 +36,9 @@ def FocalLoss(
         loss = alpha_t * loss
     return _loss_reduction(loss,reduction)
 
-class MFELoss(nn.Module):
+class MFELoss_1ParamBrownian(nn.Module):
     def __init__(self, n_UUT, mu0=1, sigma0=1, sigma_square=1):
         super().__init__()
-        # 1ParamBrownian
         self.theta_train = nn.Parameter(torch.empty(n_UUT).normal_(mu0,sigma0))
         self.sigma_square = nn.Parameter(torch.FloatTensor([sigma_square]))
 
@@ -46,10 +46,31 @@ class MFELoss(nn.Module):
         theta = self.theta_train[indice].unsqueeze(1)
         loss = torch.log(self.sigma_square + 1e-7) + \
             (X.diff(prepend=torch.zeros(
-                X.shape[0], 1, *X.shape[2:],  # 拼接1列0在序列维度
+                X.shape[0], 1, *X.shape[2:],
                 dtype=X.dtype, 
                 device=X.device
             )) - theta).square()
+        return _loss_reduction(loss, reduction)
+
+class MFELoss_LSTM(nn.Module):
+    def __init__(self, n_UUT, 
+                lstm_hidden_size, num_lstm_layers = 1, lstm_dropout = 0.0,
+                mu0 = 1, sigma0 = 1):
+        super().__init__()
+        self.tmax = 500
+        self.lstm = nn.LSTM(
+            1, lstm_hidden_size, num_lstm_layers,
+            dropout = lstm_dropout, batch_first = True
+        )
+        self.Gamma_train = nn.Parameter(torch.empty(n_UUT,lstm_hidden_size).normal_(mu0,sigma0))
+
+    def forward(self, hi, t, indice, lengths, reduction = 'mean'):
+        Gamma = self.Gamma_train[indice]
+        t = pack_padded_sequence(t, lengths, batch_first = True, enforce_sorted = False)
+        psi,(_,_) = self.lstm(t/self.tmax)
+        psi, lengths = pad_packed_sequence(psi, batch_first = True)
+        dgrd_status = psi@Gamma
+        loss = (hi - dgrd_status).square()
         return _loss_reduction(loss, reduction)
 
 def MVFLoss(hi_f,m=1,reduction="none",):

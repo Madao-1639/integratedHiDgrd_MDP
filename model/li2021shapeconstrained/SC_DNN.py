@@ -4,7 +4,9 @@ Between the last hidden layer and the output layer, the identity activation func
 '''
 import torch.nn as nn
 from sklearn.linear_model import LogisticRegression
+from utils.registry import MODEL_REGISTRY
 
+@MODEL_REGISTRY('SC')
 class SC_DNN(nn.Module):
     def __init__(self,args):
         super().__init__()
