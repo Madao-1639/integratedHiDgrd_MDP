@@ -6,7 +6,6 @@ import time
 def parse_common_args(parser):
     # Model setting
     parser.add_argument('--model_type', type=str, default='Base', choices=['Base','SC','Integrated','MS'])
-    parser.add_argument('--task', type=str, default='reg', choices=['cls','reg'], help='"cls" for classification, "reg" for regression')
     parser.add_argument('--lstm_hidden_size', type=int, default=16)
     parser.add_argument('--num_lstm_layers', type=int, default=1)
     parser.add_argument('--lstm_dropout', type=float, default=0.0)

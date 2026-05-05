@@ -22,7 +22,9 @@ from utils.utils import test4norm, plot_hi
 
 from abc import ABC, abstractmethod
 class BaseTrainer(ABC):
-    """Base class for trainers."""
+    """
+    Base class for trainers.
+    """
     def __init__(self, args,
                 train_data: pd.DataFrame | None = None, val_data: pd.DataFrame | None = None,
                 train_loader: DataLoader | None = None, val_loader: DataLoader | None = None,
@@ -84,7 +86,7 @@ class BaseTrainer(ABC):
         self.optimizer = optimizer
 
     def get_loss_wa_coef(self) -> None:
-        self.train_UUT_dict = {UUT:i for i,UUT in enumerate(self.ls_dict.index)}
+        self.train_UUT_dict = {UUT: i for i, UUT in enumerate(self.ls_dict.index)}
         pass
 
     def _UUT2idx(self, UUT):
@@ -95,10 +97,21 @@ class BaseTrainer(ABC):
 
     def move_batch_to_device(self, batch: dict) -> None:
         # Move all tensor data in the batch to the model's device
+        def _move(x: torch.Tensor | list | tuple):
+            if isinstance(x, torch.Tensor):
+                return x.to(self.device)
+            elif isinstance(x, list):
+                for i, x_i in enumerate(x):
+                    x[i] = _move(x_i)
+                return x
+            elif isinstance(x, tuple):
+                return tuple(_move(x_i) for x_i in x)
+            else:
+                return x
+
         for k, v in batch.items():
-            if isinstance(v, torch.Tensor):
-                batch[k] = v.to(self.device)
-    
+            batch[k] = _move(v)
+
     @abstractmethod
     def model_forward(self, batch: dict) -> dict:
         '''
@@ -132,9 +145,24 @@ class BaseTrainer(ABC):
         raise NotImplementedError
 
     def model_predict(self, batch: dict) -> dict:
+        '''
+        Make predictions for a given batch of data. This method can be overridden for custom prediction logic, but by default it simply calls `model_forward` to get the model's output.
+        Args:
+            batch (dict): The input data batch.
+        Returns:
+            A dictionary containing the predictions.
+        '''
         return self.model_forward(batch)
     
     def compute_metrics(self, output: dict, batch: dict) -> dict:
+        '''
+        Computes the metrics for the given batch and model output.
+        Args:
+            output (dict): The model's output for the given batch.
+            batch (dict): The input data batch.
+        Returns:
+            A dictionary containing the computed metrics. For example, it may include precision, recall, and F1 score for classification tasks.
+        '''
         precision, recall, f1, _ = precision_recall_fscore_support(
             batch['Y'], output['Y'], 
             average = 'binary', zero_division = 0
@@ -144,12 +172,21 @@ class BaseTrainer(ABC):
             'Recall': recall,
             'F1': f1,
         }
-    def optimize(self, total_loss: torch.Tensor) -> None:
+
+    def optimize(self, loss: dict) -> None:
+        '''
+        Perform optimization step based on the computed total loss.
+        Args:
+            loss (dict): A dictionary containing the computed loss values, where 'total_loss' is the key for the overall loss used for backpropagation.
+        '''
         self.optimizer.zero_grad()
-        total_loss.backward()
+        loss['total_loss'].backward()
         self.optimizer.step()
 
     def train(self):
+        '''
+        Model training framework that iterates over epochs, and calls the appropriate hooks for training and validation stages.
+        '''
         for epoch in range(1, self.args.num_epoch + 1):
             # Train Stage
             self.train_per_epoch(epoch)
@@ -162,76 +199,180 @@ class BaseTrainer(ABC):
                 self.logger.save_checkpoint(self.model, epoch)
 
     def train_per_epoch(self, epoch: int):
-        self.model.train()
+        '''
+        Train the model for one epoch. This method iterates over the training data loader and calls the appropriate hooks for each training stage.
+        '''
+        meta = self.on_train_epoch_start(epoch)
         for batch_idx, batch in enumerate(self.train_loader):
-            self.before_train_step(batch_idx, batch)
-            loss = self.train_step(batch)
-            self.after_train_step(epoch, batch_idx, loss)
+            self.before_train_step(batch_idx, batch, meta)
+            result = self.train_step(batch)
+            self.after_train_step(epoch, batch_idx, result, meta)
+        self.on_train_epoch_end(epoch, meta)
 
-    def before_train_step(self, batch_idx: int, batch: dict) -> None:
-        """
-        Hook before each training step.
+    def on_train_epoch_start(self, epoch: int) -> dict:
+        '''
+        Hook called before each training epoch.
+        This method can be used to:
+            1. Set the model to training mode
+            2. Initialize any necessary variables or states for the epoch
+        
+        Args:
+            epoch (int): The current epoch number.
+        Returns:
+            dict: A dictionary containing any necessary information for the training epoch, which can be used across different hooks.
+        '''
+        self.model.train()
+        return {}
+
+    def before_train_step(self, batch_idx: int, batch: dict, meta: dict) -> None:
+        '''
+        Hook called before each training step.
+        This method can be used to:
+            1. Move the batch data to the appropriate device (CPU or GPU) for training.
+            2. Perform any necessary preprocessing on the batch data before it is fed into the model.
 
         Args:
             batch_idx (int): The index of the current batch.
             batch (dict): A dictionary containing the batch data, where values may be torch.Tensors.
-        """
+            meta (dict): A dictionary for storing any necessary information for the training epoch.
+        '''
         self.move_batch_to_device(batch)
     
     def train_step(self, batch: dict) -> dict:
-        """Execute a single training step.
-
+        '''
+        Execute a single training step.
         This method defines the core training logic for one batch. 
         Implementations must include three key components:
-        1. Forward pass: Compute model outputs from input data.
-        2. Loss computation: Calculate the loss value based on predictions and ground truth.
-        3. Gradient update: Perform backpropagation and update model parameters.
+            1. Forward pass: Compute model outputs from input data.
+            2. Loss computation: Calculate the loss value based on predictions and ground truth.
+            3. Gradient update: Perform backpropagation and update model parameters.
 
         Args:
             batch(dict): The input data batch for training.
 
         Returns:
-            A dictionary containing the computed loss values.
-        """
+            A dictionary containing the output of the model and the computed loss for the batch. 
+        '''
         output = self.model_forward(batch)
         loss = self.compute_loss(output, batch)
-        self.optimize(loss['total_loss'])
+        self.optimize(loss)
     
-        return loss
+        return {
+            'output': output,
+            'loss': loss,
+        }
 
-    def after_train_step(self, epoch: int, batch_idx: int, loss: dict) -> None:
+    def after_train_step(self, epoch: int, batch_idx: int, result: dict, meta: dict) -> None:
+        '''
+        Hook called after each training step.
+        This method can be used to:
+            1. Log metrics to the logger (batch level)
+            2. Save checkpoints (batch level)
+            3. Verbose training progress (batch level)
+        '''
         # Record loss
         if self.logger:
-            for k, v in loss.items():
+            for k, v in result['loss'].items():
                 self.logger.record_scalars('Loss/train', k, v)
 
         # Monitor training progress
         if (batch_idx + 1) % self.args.print_freq == 0:
-            print(f'Train: Epoch {epoch} batch {batch_idx + 1} Loss {loss['total_loss'].item():.6f}')
+            print(f'Train: Epoch {epoch} batch {batch_idx + 1} Loss {result['loss']['total_loss'].item():.6f}')
+
+    def on_train_epoch_end(self, epoch: int, meta: dict) -> None:
+        '''
+        Hook called after each training epoch.
+        This method can be used to:
+            1. Record metrics (epoch level)
+            2. Save checkpoints (epoch level)
+            3. Verbose training progress (epoch level)
+        '''
+        pass
 
     def val_per_epoch(self, epoch: int) -> dict:
-        self.model.eval()
-        all_metrics = {}
+        '''
+        Validate the model for one epoch. This method iterates over the validation data loader and calls the appropriate hooks for each validation stage.
+        '''
+        meta = self.on_val_epoch_start(epoch)
         for batch_idx, batch in enumerate(self.val_loader):
-            self.before_val_step(batch_idx, batch)
-            metrics = self.val_step(batch)
-            self.after_val_step(epoch, batch_idx, metrics, all_metrics)
-        for metric_name, metric in all_metrics.items():
-            self.logger.writer.add_scalar(f'Metric/{metric_name}', sum(metric)/len(metric), epoch)
+            self.before_val_step(batch_idx, batch, meta)
+            result = self.val_step(batch)
+            self.after_val_step(epoch, batch_idx, result, meta)
+        self.on_val_epoch_end(epoch, meta)
 
-    def before_val_step(self, batch_idx: int, batch: dict) -> None:
+    def on_val_epoch_start(self, epoch: int) -> dict:
+        '''
+        Hook called before validation epoch.
+        This method can be used to:
+            1. Set the model to evaluation mode.
+            2. Initialize the metrics.
+        
+        Args:
+            epoch (int): The current epoch number.
+        Returns:
+            dict: A dictionary containing any necessary information for the validation epoch, which can be used across different hooks.
+        '''
+        self.model.eval()
+        return {
+            'metrics': {},
+            }
+
+    def before_val_step(self, batch_idx: int, batch: dict, meta: dict) -> None:
+        '''
+        Hook called before each validation step.
+        This method can be used to:
+            1. Move the batch data to the appropriate device (CPU or GPU) for validation
+            2. Perform any additional preprocessing on the batch data before it is fed into the model for validation.
+        Args:
+            batch_idx (int): The index of the current batch.
+            batch (dict): The batch data, which may include features, labels, and other relevant information.
+            meta (dict): A dictionary for storing any necessary information for the validation epoch.
+        '''
         self.move_batch_to_device(batch)
 
     def val_step(self, batch: dict) -> dict:
+        '''
+        Execute a single validation step.
+        This method defines the core validation logic for one batch.
+        Implementations must include two key components:
+            1. Forward pass: Computing predictions using the model.
+            2. Metric computation: Calculating the metrics based on the predictions and ground truth labels.
+
+        Args:
+            batch(dict): The input data batch for validation.
+
+        Returns:
+            A dictionary containing the computed metrics.
+        '''
         output = self.model_predict(batch)
         metrics = self.compute_metrics(output, batch)
-        return metrics
+        return {
+            'output': output,
+            'metrics': metrics,
+        }
     
-    def after_val_step(self, epoch: int, batch_idx: int, metrics: dict, all_metrics: dict) -> None:
+    def after_val_step(self, epoch: int, batch_idx: int, result: dict, meta: dict) -> None:
+        '''
+        Hook called after each validation step.
+        This method can be used to:
+            1. Log metrics to a logger (batch level)
+        '''
         # Record metrics
-        for metric_name, metric in metrics.items():
-            if metric_name not in all_metrics:
-                all_metrics[metric_name] = [metric]
+        for metric_name, metric in result['metrics'].items():
+            if metric_name in meta['metrics']:
+                meta['metrics'][metric_name].append(metric)
+            else:
+                meta['metrics'][metric_name] = [metric]
+
+    def on_val_epoch_end(self, epoch: int, meta: dict) -> None:
+        '''
+        Hook called after the validation epoch ends.
+        This method can be used to:
+            1. Log metrics to a logger (epoch level)
+        '''
+        for metric_name, metric in meta['metrics'].items():
+            self.logger.writer.add_scalar(f'Metric/{metric_name}', sum(metric)/len(metric), epoch)
+
 
 
 @TRAINER_REGISTRY('Base')
@@ -242,7 +383,7 @@ class BaseRTFTrainer(BaseTrainer):
         super().get_model()
         self.mfe_loss = MFELoss(n_UUT=len(self.ls_dict))
     
-    def before_train_step(self, batch_idx, batch):
+    def before_train_step(self, batch_idx, batch, meta):
         super().before_train_step(batch_idx, batch)
         batch['lengths'] = torch.as_tensor([t.shape[0] for t in batch['t']])
 
@@ -268,9 +409,9 @@ class BaseRTFTrainer(BaseTrainer):
             'total_loss': total_loss
         }
     
-    def after_train_step(self, epoch, batch_idx, loss):
+    def after_train_step(self, epoch, batch_idx, result, meta):
         self.constrain_parameters()
-        super().after_train_step(epoch, batch_idx, loss)
+        super().after_train_step(epoch, batch_idx, result, meta)
 
     def model_predict(self, batch):
         Y_pred, mask = self.model.predict(batch['X'], batch['lengths'])
@@ -328,127 +469,6 @@ class BaseRTFTrainer(BaseTrainer):
         self.mfe_loss.sigma_square.data.clamp_(min = 0.1)
 
 
-@TRAINER_REGISTRY('SC')
-class SCTrainer(BaseTrainer):
-    '''SC Model Trainer'''
-
-    def get_loss_wa_coef(self):
-        super().get_loss_wa_coef()
-        self.mon_loss_wa_coef = torch.FloatTensor(1/(self.ls_dict.values-1))
-        self.con_loss_wa_coef = torch.FloatTensor(1/(self.ls_dict.values-2))
-
-    def train_per_epoch(self, epoch):
-        # Switch to train mode
-        self.model.train()
-
-        all_y = []
-        all_hi = []
-        for i, (start, end, UUT, t, (X_ppre, X_pre, X_cur), (y_ppre, y_pre, y_cur)) in enumerate(self.train_loader):
-            X_ppre = X_ppre.to(self.device)
-            X_pre = X_pre.to(self.device)
-            X_cur = X_cur.to(self.device)
-            # y_true = y_true.to(self.device)
-
-            hi_ppre = self.model(X_ppre)
-            hi_pre = self.model(X_pre)
-            hi_cur = self.model(X_cur)
-
-            loss = self.compute_loss(start, end, hi_ppre, hi_pre, hi_cur, UUT) # unsupervised Learning
-
-            total_loss = loss['total_loss']
-
-            self.optimizer.zero_grad()
-            total_loss.backward()
-            self.optimizer.step()
-
-            if self.logger:
-                for k,v in loss.items():
-                    self.logger.record_scalars('Loss/train', k, v)
-
-            if (i+1) % self.args.print_freq == 0:
-                print(f'Train: Epoch {epoch} batch {i+1} Loss {total_loss.item():.6f}')
-            
-            all_y.extend([y_ppre[start],y_pre[start],y_cur])
-            all_hi.extend([hi_ppre[start].detach(),hi_pre[start].detach(),hi_cur.detach()])
-        all_y = torch.concat(all_y)
-        all_hi = torch.concat(all_hi)
-        self.model.fit(all_hi,all_y)
-
-    def compute_loss(self, start, end, hi_ppre, hi_pre, hi_cur, UUT):
-        indices = self._UUT2idx(UUT)
-        mon_loss_wa_coef = self.mon_loss_wa_coef[indices]
-        con_loss_wa_coef = self.con_loss_wa_coef[indices]
-
-        mvf_loss = self.args.mvf_loss_weight * MVFLoss(hi_cur[end], self.args.MVFLoss_m, reduction="sum")
-
-        mon_loss_start = mon_loss_wa_coef[start]@MONLoss(hi_ppre[start],hi_pre[start], c=self.args.MONLoss_c, reduction="none")
-        mon_loss_cur = mon_loss_wa_coef@MONLoss(hi_pre,hi_cur, c=self.args.MONLoss_c, reduction="none")
-        mon_loss = self.args.mon_loss_weight * (mon_loss_start + mon_loss_cur)
-        con_loss = self.args.con_loss_weight * (con_loss_wa_coef@CONLoss(hi_ppre,hi_pre,hi_cur, c=self.args.CONLoss_c, reduction="none"))
-
-        total_loss = mvf_loss + mon_loss + con_loss
-        loss = {
-            'mvf_loss': mvf_loss,
-            'con_loss': con_loss,
-            'mon_loss': mon_loss,
-            'total_loss': total_loss
-        }
-        return loss
-
-
-@TRAINER_REGISTRY('Integrated')
-class IntegratedTrainer(BaseTrainer):
-    '''Integrated Model Trainer'''
-
-    def train_per_epoch(self, epoch):
-        self.model.train()
-
-        all_y = []
-        all_hi = []
-        for i, (UUT, t, X, y_true) in enumerate(self.train_loader):
-            t = t.to(self.device)
-            X = X.to(self.device)
-            y_true = y_true.to(self.device)
-
-            hi = self.model(X)
-
-            loss = self.compute_loss(hi, t, UUT)
-
-            total_loss = loss['total_loss']
-
-            self.optimizer.zero_grad()
-            total_loss.backward()
-            self.optimizer.step()
-
-            if self.logger:
-                for k,v in loss.items():
-                    self.logger.record_scalars('Loss/train', k, v)
-
-            if (i+1) % self.args.print_freq == 0:
-                print(f'Train: Epoch {epoch} batch {i+1} Loss {total_loss.item():.6f}')
-            
-            all_y.append(y_true)
-            all_hi.append(hi.detach())
-        all_y = torch.concat(all_y)
-        all_hi = torch.concat(all_hi)
-        self.model.fit(all_hi,all_y)
-
-    def compute_loss(self, hi, t, UUT):
-        mfe_loss = self.args.mfe_loss_weight * self.model.mfe_loss(hi, t, UUT, reduction = 'mean')
-        mvf_loss = self.args.mvf_loss_weight * MVFLoss(hi[-1], self.args.MVFLoss_m, reduction="none")
-        mon_loss = self.args.mon_loss_weight * MONLoss(hi, c=self.args.MONLoss_c, reduction="mean")
-        con_loss = self.args.mon_loss_weight * CONLoss(hi, c=self.args.CONLoss_c, reduction="mean")
-
-        total_loss = mfe_loss + mvf_loss + mon_loss + con_loss
-        loss = {
-            'mfe_loss': mfe_loss,
-            'mvf_loss': mvf_loss,
-            'con_loss': con_loss,
-            'mon_loss': mon_loss,
-            'total_loss': total_loss
-        }
-        return loss
-
 
 @TRAINER_REGISTRY('MS')
 class MSRTFTrainer(BaseRTFTrainer):
@@ -475,6 +495,7 @@ class MSRTFTrainer(BaseRTFTrainer):
             'mfe_loss': mfe_loss,
             'total_loss': total_loss
         }
+
     def record_per_epoch(self,epoch):
         self.model.eval()
 
@@ -515,3 +536,119 @@ class MSRTFTrainer(BaseRTFTrainer):
     #     super().constrain_parameters()
     #     self.model.hi_transformer.c1.data.clamp_(max=11)
     #     self.model.hi_transformer.c2.data.clamp_(max=0.1)
+
+
+
+@TRAINER_REGISTRY('SC')
+class SCTrainer(BaseTrainer):
+    '''SC Model Trainer'''
+
+    def get_loss_wa_coef(self):
+        super().get_loss_wa_coef()
+        self.mon_loss_wa_coef = torch.FloatTensor(1/(self.ls_dict.values-1))
+        self.con_loss_wa_coef = torch.FloatTensor(1/(self.ls_dict.values-2))
+
+    def on_train_epoch_start(self, epoch):
+        meta = super().on_train_epoch_start(epoch)
+        meta['Y'] = []
+        meta['hi'] = []
+        meta['start'] = None
+        meta['end'] = None
+        return meta
+    
+    def before_train_step(self, batch_idx, batch, meta):
+        super().before_train_step(batch_idx, batch, meta)
+        start, end, (y_ppre, y_pre, y_cur) = batch['start'], batch['end'], batch['Y']
+        meta['Y'].extend([y_ppre[start], y_pre[start], y_cur])
+        meta['start'] = start
+        meta['end'] = end
+
+    def model_forward(self, batch):
+        return {
+            'hi_ppre': self.model(batch['X'][0]),
+            'hi_pre': self.model(batch['X'][1]),
+            'hi_cur': self.model(batch['X'][2])
+        }
+
+    def compute_loss(self, output, batch):
+        start, end = batch['start'], batch['end']
+        indices = self._UUT2idx(batch['UUT'])
+        mon_loss_wa_coef = self.mon_loss_wa_coef[indices]
+        con_loss_wa_coef = self.con_loss_wa_coef[indices]
+
+        hi_ppre, hi_pre, hi_cur = output['hi_ppre'], output['hi_pre'], output['hi_cur']
+        mvf_loss = self.args.mvf_loss_weight * MVFLoss(hi_cur[end], self.args.MVFLoss_m, reduction="sum")
+        mon_loss_start = mon_loss_wa_coef[start]@MONLoss(hi_ppre[start],hi_pre[start], c=self.args.MONLoss_c, reduction="none")
+        mon_loss_cur = mon_loss_wa_coef@MONLoss(hi_pre,hi_cur, c=self.args.MONLoss_c, reduction="none")
+        mon_loss = self.args.mon_loss_weight * (mon_loss_start + mon_loss_cur)
+        con_loss = self.args.con_loss_weight * (con_loss_wa_coef@CONLoss(hi_ppre,hi_pre,hi_cur, c=self.args.CONLoss_c, reduction="none"))
+
+        total_loss = mvf_loss + mon_loss + con_loss
+        return {
+            'mvf_loss': mvf_loss,
+            'con_loss': con_loss,
+            'mon_loss': mon_loss,
+            'total_loss': total_loss
+        }
+
+    def after_train_step(self, epoch, batch_idx, result, meta):
+        super().after_train_step(epoch, batch_idx, result, meta)
+        start, end = meta['start'], meta['end']
+        hi_ppre, hi_pre, hi_cur = result['output']['hi_ppre'], result['output']['hi_pre'], result['output']['hi_cur']
+        meta['hi'].extend([hi_ppre[start].detach(), hi_pre[start].detach(), hi_cur[end].detach()])
+
+    def on_train_epoch_end(self, epoch, meta):
+        super().on_train_epoch_end(epoch, meta)
+        all_y = torch.concat(meta['Y'])
+        all_hi = torch.concat(meta['hi'])
+        self.model.fit(all_hi,all_y)
+        
+
+
+@TRAINER_REGISTRY('Integrated')
+class IntegratedTrainer(BaseTrainer):
+    '''Integrated Model Trainer'''
+    
+    def on_train_epoch_start(self, epoch, meta):
+        meta = super().on_train_epoch_start(epoch)
+        meta['Y'] = []
+        meta['hi'] = []
+        return meta
+    
+    def before_train_step(self, batch_idx, batch, meta):
+        super().before_train_step(batch_idx, batch, meta)
+        meta['Y'].append(batch['Y'])
+
+    def model_forward(self, batch):
+        return {
+            'hi': self.model(batch['X'])
+        }
+
+    def compute_loss(self, output, batch):
+        UUT, t = batch['UUT'], batch['t']
+        hi = output['hi']
+
+        mfe_loss = self.args.mfe_loss_weight * self.model.mfe_loss(hi, t, UUT, reduction='mean')
+        mvf_loss = self.args.mvf_loss_weight * MVFLoss(hi[-1], self.args.MVFLoss_m, reduction="none")
+        mon_loss = self.args.mon_loss_weight * MONLoss(hi, c=self.args.MONLoss_c, reduction="mean")
+        con_loss = self.args.con_loss_weight * CONLoss(hi, c=self.args.CONLoss_c, reduction="mean")
+
+        total_loss = mfe_loss + mvf_loss + mon_loss + con_loss
+        loss = {
+            'mfe_loss': mfe_loss,
+            'mvf_loss': mvf_loss,
+            'con_loss': con_loss,
+            'mon_loss': mon_loss,
+            'total_loss': total_loss
+        }
+        return loss
+    
+    def after_train_step(self, epoch, batch_idx, result, meta):
+        super().after_train_step(epoch, batch_idx, result, meta)
+        meta['hi'].append(result['output']['hi'].detach())
+
+    def on_train_epoch_end(self, epoch, meta):
+        super().on_train_epoch_end(epoch, meta)
+        all_y = torch.concat(meta['Y'])
+        all_hi = torch.concat(meta['hi'])
+        self.model.fit(all_hi,all_y)
