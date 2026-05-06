@@ -583,11 +583,11 @@ class SCTrainer(BaseTrainer):
         con_loss_wa_coef = self.con_loss_wa_coef[indices]
 
         hi_ppre, hi_pre, hi_cur = output['hi_ppre'], output['hi_pre'], output['hi_cur']
-        mvf_loss = self.args.mvf_loss_weight * MVFLoss(hi_cur[end], self.args.MVFLoss_m, reduction="sum")
-        mon_loss_start = mon_loss_wa_coef[start]@MONLoss(hi_ppre[start],hi_pre[start], c=self.args.MONLoss_c, reduction="none")
-        mon_loss_cur = mon_loss_wa_coef@MONLoss(hi_pre,hi_cur, c=self.args.MONLoss_c, reduction="none")
+        mvf_loss = self.args.mvf_loss_weight * MVFLoss(hi_cur[end], self.args.MVFLoss_m, reduction='sum')
+        mon_loss_start = mon_loss_wa_coef[start]@MONLoss(hi_ppre[start],hi_pre[start], c=self.args.MONLoss_c, reduction='none')
+        mon_loss_cur = mon_loss_wa_coef@MONLoss(hi_pre,hi_cur, c=self.args.MONLoss_c, reduction='none')
         mon_loss = self.args.mon_loss_weight * (mon_loss_start + mon_loss_cur)
-        con_loss = self.args.con_loss_weight * (con_loss_wa_coef@CONLoss(hi_ppre,hi_pre,hi_cur, c=self.args.CONLoss_c, reduction="none"))
+        con_loss = self.args.con_loss_weight * (con_loss_wa_coef@CONLoss(hi_ppre,hi_pre,hi_cur, c=self.args.CONLoss_c, reduction='none'))
 
         total_loss = mvf_loss + mon_loss + con_loss
         return {
@@ -601,7 +601,7 @@ class SCTrainer(BaseTrainer):
         super().after_train_step(epoch, batch_idx, result, meta)
         start, end = meta['start'], meta['end']
         hi_ppre, hi_pre, hi_cur = result['output']['hi_ppre'], result['output']['hi_pre'], result['output']['hi_cur']
-        meta['hi'].extend([hi_ppre[start].detach(), hi_pre[start].detach(), hi_cur[end].detach()])
+        meta['hi'].extend([hi_ppre[start].detach(), hi_pre[start].detach(), hi_cur.detach()])
 
     def on_train_epoch_end(self, epoch, meta):
         super().on_train_epoch_end(epoch, meta)
@@ -619,10 +619,10 @@ class IntegratedTrainer(BaseTrainer):
         super().get_model()
         self.mfe_loss = MFELoss_LSTM(n_UUT = len(self.ls_dict),
                                     lstm_hidden_size = self.args.lstm_hidden_size,
-                                    lstm_num_layers = self.args.lstm_num_layers,
+                                    num_lstm_layers = self.args.num_lstm_layers,
                                     lstm_dropout = self.args.lstm_dropout)
 
-    def on_train_epoch_start(self, epoch, meta):
+    def on_train_epoch_start(self, epoch):
         meta = super().on_train_epoch_start(epoch)
         self.mfe_loss.train()
         meta['Y'] = []
@@ -645,18 +645,19 @@ class IntegratedTrainer(BaseTrainer):
         UUT, t, lengths = batch['UUT'], batch['t'], batch['lengths']
         hi, mask = output['hi'], output['mask']
         indices = self._UUT2idx(UUT)
+        batch_size = hi.shape[0]
 
         mfe_loss = self.mfe_loss(hi, t, indices, lengths, reduction='none')
-        mfe_loss = self.args.mfe_loss_weight * mfe_loss.masked_select(mask).mean()
+        mfe_loss = self.args.mfe_loss_weight * mfe_loss.masked_select(mask).mean() / 2
 
-        mvf_loss = self.args.mvf_loss_weight * MVFLoss(hi.gather(1, lengths - 1), self.args.MVFLoss_m, reduction="mean")
+        last_indices = (lengths - 1).unsqueeze(1)
+        mvf_loss = self.args.mvf_loss_weight * MVFLoss(hi.gather(1, last_indices), self.args.MVFLoss_m, reduction="mean")
 
-        batch_size = hi.shape[0]
-        mon_loss = MONLoss(hi, c=self.args.MONLoss_c, reduction="none") / ((lengths - 1) * batch_size)
+        mon_loss = MONLoss(hi, c=self.args.MONLoss_c, reduction="none") / (last_indices * batch_size)
         mon_loss = self.args.mon_loss_weight * mon_loss.masked_select(mask[:, 1:]).sum()
 
-        con_loss = CONLoss(hi, c=self.args.CONLoss_c, reduction="none") / ((lengths - 2) * batch_size)
-        con_loss = self.args.con_loss_weight * CONLoss(hi, c=self.args.CONLoss_c, reduction="mean")
+        con_loss = CONLoss(hi, c=self.args.CONLoss_c, reduction="none") / ((last_indices - 1) * batch_size)
+        con_loss = self.args.con_loss_weight * con_loss.masked_select(mask[:, 2:]).sum()
 
         total_loss = mfe_loss + mvf_loss + mon_loss + con_loss
         loss = {

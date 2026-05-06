@@ -66,10 +66,11 @@ class MFELoss_LSTM(nn.Module):
 
     def forward(self, hi, t, indice, lengths, reduction = 'mean'):
         Gamma = self.Gamma_train[indice]
+        t = t.unsqueeze(-1) / self.tmax
         t = pack_padded_sequence(t, lengths, batch_first = True, enforce_sorted = False)
-        psi,(_,_) = self.lstm(t/self.tmax)
+        psi,(_,_) = self.lstm(t)
         psi, lengths = pad_packed_sequence(psi, batch_first = True)
-        dgrd_status = psi@Gamma
+        dgrd_status = (psi@Gamma.unsqueeze(-1)).squeeze(-1)
         loss = (hi - dgrd_status).square()
         return _loss_reduction(loss, reduction)
 

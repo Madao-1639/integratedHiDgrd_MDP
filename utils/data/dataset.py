@@ -1,11 +1,12 @@
 import pandas as pd
 import numpy as np
 from torch.utils.data import Dataset
-from .collate_fn import custom_TW_collate_fn, custom_TW_ND_collate_fn, custom_RTF_collate_fn
+from .collate_fn import custom_collate_fn, custom_collate_fn_ND, custom_TW_collate_fn, custom_RTF_collate_fn
 from utils.registry import DATASET_REGISTRY
 
 
 
+@DATASET_REGISTRY('Base')
 class BaseDataset(Dataset):
     def __init__(self, data: pd.DataFrame, train: bool, args):
         ''' Base `Dataset` class for CMAPSS FD001 Dataset.
@@ -14,7 +15,7 @@ class BaseDataset(Dataset):
         self.data = data
         self.train = train
         self.pos_label = args.pos_label
-        self.collate_fn = None
+        self.collate_fn = custom_collate_fn
 
         self.parse_data()
 
@@ -45,6 +46,34 @@ class BaseDataset(Dataset):
         return len(self.sample_indices)
 
 
+
+@DATASET_REGISTRY('Base_ND')
+class BaseDatasetND(BaseDataset):
+    def __init__(self, data, train, args):
+        self.N = args.N
+        super().__init__(data, train, args)
+        self.collate_fn = custom_collate_fn_ND
+
+    def get_sample_indices(self):
+        sample_indices = []
+        for UUT,group_indices in self.grouped.groups.items():
+            end_time = self.ls_dict[UUT]
+            sample_indices.extend(
+                (t==self.N+1, t==end_time, # Start flag & End flag
+                UUT,t,
+                list(group_indices[t-i] for i in range(self.N+1,0,-1)),
+                self.Y[group_indices[t-self.N-1:t]]    # Label for current time.
+                ) for t in range(self.N+1,end_time+1)
+            )
+        self.sample_indices = sample_indices
+
+    def __getitem__(self, index):        
+        start, end, UUT, t, idx_tuple, Y = self.sample_indices[index]
+        return start, end, UUT, t, [self.X[idx] for idx in idx_tuple], Y
+
+
+
+
 @DATASET_REGISTRY('TW')
 class TWDataset(BaseDataset):
     def __init__(self, data, train, args):
@@ -54,9 +83,9 @@ class TWDataset(BaseDataset):
             UUT, t (time series the window covers) and x (features),
             or 5 elements for train data, with y (labels) and start_sign (A bool to indicate the first window) added.
         There is no overlap if 'sliding_offset' >= 'window_width'.'''
+        self.window_width = args.window_width
         super().__init__(data, train, args)
         self.collate_fn = custom_TW_collate_fn
-        self.window_width = args.window_width
     
     def get_sample_indices(self):
         '''Create Time Windows(TW) of data.
@@ -82,9 +111,9 @@ class TWDataset(BaseDataset):
 @DATASET_REGISTRY('TW_ND')
 class TWDataset_ND(TWDataset):
     def __init__(self, data, train, args):
-        super().__init__(data, train, args)
-        self.collate_fn = custom_TW_ND_collate_fn
         self.N = args.N
+        super().__init__(data, train, args)
+        self.collate_fn = custom_collate_fn_ND
 
     def get_sample_indices(self):
         sample_indices = []
@@ -102,8 +131,8 @@ class TWDataset_ND(TWDataset):
         self.sample_indices = sample_indices
 
     def __getitem__(self, index):        
-        start, end, UUT, t, indices_tuple, y = self.sample_indices[index]
-        return start, end, UUT, t, (self.X[indices] for indices in indices_tuple), y
+        start, end, UUT, t, indices_tuple, Y = self.sample_indices[index]
+        return start, end, UUT, t, [self.X[indices] for indices in indices_tuple], Y
 
 
 

@@ -6,17 +6,18 @@ from torch.nn.utils.rnn import pad_sequence
 def _pack_data(batch_data):
     return torch.stack([torch.FloatTensor(data) for data in batch_data])
 
-def custom_TW_collate_fn(batch):
+def custom_collate_fn(batch):
     batch_UUT, batch_t, batch_X, batch_Y = zip(*batch)
+    batch_X = torch.FloatTensor(batch_X)
     batch_Y = torch.FloatTensor(batch_Y)
     return {
         'UUT': batch_UUT,
         't': batch_t,
-        'X': _pack_data(batch_X),
+        'X': batch_X,
         'Y': batch_Y,
     }
 
-def custom_TW_ND_collate_fn(batch):
+def custom_collate_fn_ND(batch):
     batch_start, batch_end, batch_UUT, batch_t, batch_multi_X, batch_multi_Y = zip(*batch)
     batch_start = torch.BoolTensor(batch_start)
     batch_end = torch.BoolTensor(batch_end)
@@ -25,8 +26,18 @@ def custom_TW_ND_collate_fn(batch):
         'end': batch_end,
         'UUT': batch_UUT,
         't': batch_t,
-        'X': list(_pack_data(batch_X) for batch_X in zip(*batch_multi_X)),
-        'Y': list(torch.FloatTensor(batch_y) for batch_y in zip(*batch_multi_Y)),
+        'X': [torch.FloatTensor(batch_X) for batch_X in zip(*batch_multi_X)],
+        'Y': [torch.FloatTensor(batch_y) for batch_y in zip(*batch_multi_Y)],
+    }
+
+def custom_TW_collate_fn(batch):
+    batch_UUT, batch_t, batch_X, batch_Y = zip(*batch)
+    batch_Y = torch.FloatTensor(batch_Y)
+    return {
+        'UUT': batch_UUT,
+        't': batch_t,
+        'X': _pack_data(batch_X),
+        'Y': batch_Y,
     }
 
 def custom_RTF_collate_fn(batch):
@@ -52,7 +63,7 @@ def custom_RTF_collate_fn(batch):
             - batch_Y (list[torch.FloatTensor]): List of converted float tensors for Y.
     ''' 
     batch_UUT, batch_t, batch_X, batch_Y = zip(*batch)
-    lengths = torch.as_tensor([t.shape[0] for t in batch['t']])
+    lengths = torch.as_tensor([t.shape[0] for t in batch_t])
     batch_t = pad_sequence([torch.FloatTensor(t) for t in batch_t], batch_first = True)
     batch_X = pad_sequence([torch.FloatTensor(X) for X in batch_X], batch_first = True)
     batch_Y = pad_sequence([torch.FloatTensor(Y) for Y in batch_Y], batch_first = True)
