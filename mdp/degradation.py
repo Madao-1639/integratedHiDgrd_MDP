@@ -96,3 +96,14 @@ def fit_1ParamBrownian(hi_list: list[np.array], t: int = 1):
     brownian_list = np.concatenate(brownian_list)
     sigma_square = np.var(brownian_list, ddof=1)
     return mu0, sigma0_square, sigma_square
+
+def fit_2ParamBrownian(hi_list: list[np.array], t: int = 1):
+    '''
+    Fit a 2-parameter Brownian motion model to the degradation data.
+    '''
+    theta1_list = np.array([hi[0] for hi in hi_list])
+    new_hi_list = [hi - hi[0] for hi in hi_list]
+    mu0 = np.mean(theta1_list)
+    sigma0_square = np.var(theta1_list, ddof=1)
+    mu1, sigma1_square, sigma_square = fit_1ParamBrownian(new_hi_list, t)
+    return mu0, sigma0_square, mu1, sigma1_square, sigma_square

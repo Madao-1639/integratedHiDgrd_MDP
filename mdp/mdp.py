@@ -282,7 +282,7 @@ class OR_MDP(BaseMDP_2D):
         self.threshold = self.deg_model.range 
 
         # Transition Probabilities
-        self.mu0 = mu0 - self.l_min
+        self.mu0 = mu0 - self.deg_model.l_min
         self.sigma0_square = sigma0_square
         self.mu1 = mu1
         self.sigma1_square = sigma1_square
