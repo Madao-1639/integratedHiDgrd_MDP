@@ -1,10 +1,15 @@
-*.tex
-*.bat
 *.ipynb
 *.py[cod]
+
 *.xlsx
 *.csv
 *.db
+*.db-journal
+*.db-shm
+*.db-wal
+
+*.bat
+*.tex
 
 .history/
 .vscode/

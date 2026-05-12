@@ -275,7 +275,7 @@ class OR_MDP(BaseMDP_2D):
     - Rewards: R^{\pi} (k_max * (m + 1) + 1,)
     - Discount factor: gamma
     '''
-    def __init__(self, mu0: float = -6.031, sigma0_square: float = 0.346, mu1: float = 8.061e-3, sigma1_square: float = 1.034e-5, sigma_square: float = 0.0073, **kw_args):
+    def __init__(self, mu0: float, sigma0_square: float, mu1: float, sigma1_square: float, sigma_square: float, **kw_args):
         # State space
         super().__init__(**kw_args)
         self.n_state = 1 + self.k_max * (self.m + 1) # Compared to BaseMDP_2D, OR_MDP has one more failure state per epoch
@@ -341,8 +341,8 @@ class OR_MDP(BaseMDP_2D):
         L_lag_vec = self.l_index2l(lk_indices[:-1] - 1)
             # Initial state - do nothing
         # mu0_,mu1_,sigma0_square_,sigma1_square_,rho_ = self.gen_posterior_dist(0,0)
-        # L_mu, L_sigma_square = self.gen_L_dist(0, mu1_, sigma1_square_)
-        # L_mu, L_sigma_square = self.gen_L_dist(0, self.mu1, self.sigma1_square)
+        # L_mu, L_sigma_square = self.gen_L_dist(mu0_, mu1_, sigma1_square_)
+        # L_mu, L_sigma_square = self.gen_L_dist(self.mu0, self.mu1, self.sigma1_square)
         L_mu = self.mu0 + self.mu1*self.t
         L_sigma = (self.sigma0_square + self.sigma1_square*self.t**2 + self.sigma_square)**0.5
         p_start = 0 # Pointer operation
@@ -538,6 +538,9 @@ class OR_MDP_OneParam(OR_MDP):
     '''
     One parameter version of OR_MDP, which only retains the drift random-effect parameter (while discarding the random-effect offset) in exponential degradation model.
     '''
+    def __init__(self, mu0: float, sigma0_square: float, sigma_square, **kw_args):
+        super().__init__(mu0 = kw_args['l_min'], sigma0_square = 0, mu1 = mu0, sigma1_square = sigma0_square, sigma_square = sigma_square, **kw_args)
+
     def gen_posterior_dist(self, k, lk):
         '''
         Compute the posterior distributions of parameters for the 1-parameter Exponential Degradation Model with Brownian Error Terms. This model retains only the drift random-effect parameter (discarding the random-effect offset), resulting in a simplified parameter space compared to the parent class.
@@ -556,27 +559,9 @@ class OR_MDP_OneParam(OR_MDP):
         Notes:
         - The method maintains compatibility with the parent class `OR_MDP`'s `gen_posterior_dist` interface, which returns five values. Since the 1-parameter model omits the random-effect offset and only includes the drift parameter, the unused return positions are filled with `None` to preserve method signature consistency. This allows seamless integration with inherited methods (e.g., `gen_L_dist`) that expect the parent class's return structure.
         '''
-        sigma1_square = 1/((1/self.sigma0_square)+(k*self.t/self.sigma_square))
-        mu1 = sigma1_square*((self.mu0/self.sigma0_square)+(lk*self.t/self.sigma_square))
-        return None, mu1, None, sigma1_square, None
-
-    def gen_L_dist(self, l, mu1, sigma1_square):
-        '''
-        Compute the predictive distribution of the next degradation signal (L) for the 1-parameter Exponential Degradation Model with Brownian Error Terms after a time interval `t`. This method reuses the parent class's implementation while adapting to the simplified parameter space of the 1-parameter model.
-
-        Args:
-        - l (float): Current observed degradation level (intercept term).
-        - mu1 (float): Posterior mean of the drift random-effect parameter (from the 1-parameter model).
-        - sigma1_square (float): Posterior variance of the drift random-effect parameter (from the 1-parameter model).
-
-        Returns:
-        - L_mu (float): Predictive mean of the next degradation signal L.
-        - L_sigma_square (float): Predictive variance of the next degradation signal L.
-
-        Notes:
-        - The method maintains compatibility with the parent class `OR_MDP`'s `gen_L_dist` interface by accepting parameters corresponding to the drift random-effect parameter and delegating computation to the parent class implementation. This ensures seamless integration with inherited logic (e.g., in `gen_P_R`) that relies on the parent class's return structure, while accommodating the simplified parameterization of the 1-parameter model.
-        '''
-        return super().gen_L_dist(l = l, mu1_= mu1, sigma1_square_ = sigma1_square)
+        sigma1_square_ = 1/((1/self.sigma1_square)+(k*self.t/self.sigma_square))
+        mu1_ = sigma1_square_*((self.mu1/self.sigma1_square)+(lk*self.t/self.sigma_square))
+        return None, mu1_, None, sigma1_square_, None
 
 
 
