@@ -6,15 +6,22 @@ from utils.registry import MODEL_REGISTRY
 
 class LLT(nn.Module):
     '''Learnable Logarithm Transformer'''
-    def __init__(self,c1=10.5,c2=-0.5,_delta=1e-7):
+    def __init__(self, c1: float = 10.5, c2: float = -0.5, _delta: float = 1e-7) -> None:
+        '''Initialize the Learnable Logarithm Transformer.
+
+        Args:
+            c1 (float): Initial shift value. Defaults to 10.5.
+            c2 (float): Initial bias value. Defaults to -0.5.
+            _delta (float): Small constant for numerical stability. Defaults to 1e-7.
+        '''
         super().__init__()
         self.c1 = nn.Parameter(torch.FloatTensor([c1]))
         # self.c1 = 8.2
         self.c2 = nn.Parameter(torch.FloatTensor([c2]))
         # self.c2 = 0
         self.delta = _delta
-    def forward(self,x):
-        return torch.log(F.relu(x+self.c1)+self.delta)+self.c2
+    def forward(self, x):
+        return torch.log(F.relu(x + self.c1) + self.delta) + self.c2
 
 @MODEL_REGISTRY('MS')
 class MS(Base):
@@ -23,9 +30,9 @@ class MS(Base):
         super().__init__(args=args)
         self.fix_point = args.MS_fix_point
         self.drop_first = args.MS_drop_first
-        self.hi_transformer = LLT(c1 = args.MS_LLT_c1, c2 = args.MS_LLT_c2)
+        self.hi_transformer = LLT(c1=args.MS_LLT_c1, c2=args.MS_LLT_c2)
     
-    def forward(self, X, lengths, hidden = None):
+    def forward(self, X, lengths, hidden=None):
         logits, cls_mask = super().forward(X, lengths, hidden)
         mfe_mask = torch.detach_copy(cls_mask)
         if self.fix_point:

@@ -1,16 +1,17 @@
 import torch
-import torch.nn as nn
+from torch import nn
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 from utils.registry import MODEL_REGISTRY
 
 @MODEL_REGISTRY('Base')
 class Base(nn.Module):
+    '''Base LSTM-DNN model for remaining useful life prediction.'''
     def __init__(self, args):
         super().__init__()
         self.lstm = nn.LSTM(
             args.input_size, args.lstm_hidden_size, args.num_lstm_layers,
-            dropout=args.lstm_dropout, batch_first = True,
+            dropout=args.lstm_dropout, batch_first=True,
             )
         dnn_seq = []
         input_size = args.lstm_hidden_size
@@ -18,7 +19,7 @@ class Base(nn.Module):
             dnn_seq.append(nn.Linear(input_size, hidden_size))
             dnn_seq.append(nn.ReLU())
             input_size = hidden_size
-        dnn_seq.append(nn.Linear(input_size,1))
+        dnn_seq.append(nn.Linear(input_size, 1))
         self.dnn = nn.Sequential(*dnn_seq)
         self.cls_thres = args.cls_thres
     def forward(self, X, lengths, hidden = None):
