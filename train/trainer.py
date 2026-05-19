@@ -1,9 +1,5 @@
-import os
-import pickle
-
 import torch
 from torch import nn
-from torch.optim import Adam
 
 import numpy as np
 import pandas as pd
@@ -11,9 +7,11 @@ import pandas as pd
 from sklearn.metrics import precision_recall_fscore_support
 
 from torch.utils.data import DataLoader
-from utils.data import select_loader
-from model import BaseRTF, BaseTW, SC_DNN, Integrated_DNN_LSTM, MSRTF#, MSTW
-from loss import FocalLoss,MVFLoss,MONLoss,CONLoss
+from utils.data import DATASET_REGISTRY
+from model import MODEL_REGISTRY
+from loss import OPTIMIZER_REGISTRY
+from utils.registry import TRAINER_REGISTRY
+from loss import FocalLoss, MFELoss_1ParamBrownian, MFELoss_LSTM, MVFLoss, MONLoss, CONLoss
 from utils.logger import Logger
 from utils.utils import test4norm, plot_hi
 
@@ -21,14 +19,15 @@ from utils.utils import test4norm, plot_hi
 
 from abc import ABC, abstractmethod
 class BaseTrainer(ABC):
-    """Base class for trainers."""
+    '''
+    Base class for trainers.
+    '''
     def __init__(self, args,
-                train_data: pd.DataFrame = None, val_data: pd.DataFrame = None,
-                train_loader: DataLoader = None, val_loader: DataLoader = None,
+                train_data: pd.DataFrame | None = None, val_data: pd.DataFrame | None = None,
                  **logger_kwargs) -> None:
         self.args = args
         if args.logger:
-            self.logger = Logger(args,**logger_kwargs)
+            self.logger = Logger(args, **logger_kwargs)
         else:
             self.logger = None
         if args.use_cuda and torch.cuda.is_available():
@@ -36,53 +35,57 @@ class BaseTrainer(ABC):
         else:
             self.device = torch.device("cpu")
         print(f'Training on {self.device}')
-        self.get_loader(train_data,val_data,train_loader,val_loader)
+        self.get_loader(train_data, val_data)
         self.get_model()
         self.get_optimizer()
-
         self.get_loss_wa_coef()
 
-    def get_loader(self,
-                train_data: "pd.DataFrame", val_data: "pd.DataFrame",
-                train_loader: DataLoader, val_loader: DataLoader) -> None:
-        self.train_loader = select_loader(train_data,True,self.args) if train_loader is None else train_loader
-        self.ls_dict = self.train_loader.dataset.ls_dict
+    def get_loader(self, train_data: pd.DataFrame, val_data: pd.DataFrame | None = None,) -> None:
+        train_dataset = DATASET_REGISTRY[self.args.data_type](train_data, train = True, args = self.args)
+        self.train_loader = DataLoader(train_dataset, batch_size = self.args.batch_size, shuffle = True, collate_fn = train_dataset.collate_fn)
+        self.ls_dict = train_dataset.ls_dict
 
-        if val_loader is not None:
-            self.val_loader = val_loader
-        elif val_data is not None:
-            self.val_loader = select_loader(val_data,False,self.args)
+        if not self.logger:
+            self.val_loader = None
+            self.record_HI_loader = None
+            return None
+
+        if val_data is not None:
+            val_data_type = 'RTF' if self.args.data_type == 'RTF' else 'Base'
+            val_dataset = DATASET_REGISTRY[val_data_type](val_data, train = False, args = self.args)
+            self.val_loader = DataLoader(val_dataset, batch_size = self.args.batch_size, shuffle = False, collate_fn = val_dataset.collate_fn)
         else:
             self.val_loader = None
-
+        
         if self.args.record_HI:
             if self.args.record_HI == 'train':
                 record_HI_data = train_data
             elif self.args.record_HI == 'val':
                 record_HI_data = val_data
             else:
-                record_HI_data = pd.concat([train_data,val_data])
-            if self.args.data_type == 'TW':
-                record_HI_data_type = 'RTFTW'
+                record_HI_data = pd.concat([train_data, val_data])
+            # Try to select valid given UUTs
+            data_record_UUTs = record_HI_data['UUT'].unique()
+            args_record_UUTs = self.args.record_UUTs
+            record_UUTs = list(set(data_record_UUTs) & set(args_record_UUTs)) if args_record_UUTs else []
+            if len(record_UUTs) > 0:
+                record_HI_data = record_HI_data[record_HI_data['UUT'].isin(record_UUTs)]
             else:
-                record_HI_data_type = 'RTF'
-            self.record_HI_loader = select_loader(record_HI_data,False,self.args,record_HI_data_type)
-
-            if self.logger:
-                # Sample/Select UUTs to plot HI
-                data_record_UUTs = record_HI_data['UUT'].unique()
-                args_record_UUTs = self.args.record_UUTs
-                if args_record_UUTs and all(UUT in data_record_UUTs for UUT in args_record_UUTs):
-                    self.record_UUTs = args_record_UUTs
-                else:
-                    record_num_UUTs = min(data_record_UUTs.size,self.args.record_num_UUTs)
-                    self.record_UUTs = np.random.choice(data_record_UUTs,size=record_num_UUTs,replace=False)
+                # No valid UUTs, try to draw given number of UUTs randomly
+                record_num_UUTs = min(data_record_UUTs.size, self.args.record_num_UUTs)
+                if record_num_UUTs > 0:
+                    record_UUTs = np.random.choice(data_record_UUTs, size = record_num_UUTs, replace = False)
+                    record_HI_data = record_HI_data[record_HI_data['UUT'].isin(record_UUTs)]
+            record_HI_dataset = DATASET_REGISTRY['RTF'](record_HI_data, train = False, args = self.args) # Restrict record_HI_dataset to RTF Dataset
+            self.record_HI_loader = DataLoader(record_HI_dataset, batch_size = self.args.batch_size, shuffle = False, collate_fn = record_HI_dataset.collate_fn)
         else:
             self.record_HI_loader = None
 
-    @abstractmethod
     def get_model(self) -> None:
-        pass
+        if self.args.load_model_fp:
+            self.model = torch.load(self.args.load_model_fp, map_location = self.device, weights_only = False)
+        else:
+            self.model = MODEL_REGISTRY[self.args.model_type](self.args)
 
     def get_optimizer(self) -> None:
         no_decay_pg, decay_pg = [], []
@@ -95,371 +98,655 @@ class BaseTrainer(ABC):
                         decay_pg.append(param)
                     else:
                         no_decay_pg.append(param)
-        optimizer = Adam([{'params':no_decay_pg}], lr=self.args.lr)
+        optimizer = OPTIMIZER_REGISTRY[self.args.optimizer]([{'params': no_decay_pg}], lr=self.args.lr)
         optimizer.add_param_group({'params': decay_pg, 'weight_decay': self.args.weight_decay})
         self.optimizer = optimizer
 
     def get_loss_wa_coef(self) -> None:
-        self.train_UUT_dict = {UUT:i for i,UUT in enumerate(self.ls_dict.index)}
+        self.train_UUT_dict = {UUT: i for i, UUT in enumerate(self.ls_dict.index)}
         pass
 
-    def _UUT2idx(self,UUT):
-        if hasattr(UUT,'__getitem__'): # The passed UUT is a sequence
+    # Utils
+    def _UUT2idx(self, UUT):
+        if isinstance(UUT, (torch.Tensor, np.ndarray, pd.Series, list, tuple, set, dict)):
             return [self.train_UUT_dict[_] for _ in UUT]
         else:
             return self.train_UUT_dict[UUT]
 
+    def move_batch_to_device(self, batch: dict) -> None:
+        # Move all tensor data in the batch to the model's device
+        def _move(x: torch.Tensor | list | tuple):
+            if isinstance(x, torch.Tensor):
+                return x.to(self.device)
+            elif isinstance(x, list):
+                for i, x_i in enumerate(x):
+                    x[i] = _move(x_i)
+                return x
+            elif isinstance(x, tuple):
+                return tuple(_move(x_i) for x_i in x)
+            else:
+                return x
+
+        for k, v in batch.items():
+            batch[k] = _move(v)
+
+    @abstractmethod
+    def model_forward(self, batch: dict) -> dict:
+        '''
+        Execute a single forward pass through the model (in training).
+
+        This abstract method defines the core model forward logic. 
+        Implementations must include two key components:
+        1. Forward pass: Compute model outputs from input data.
+        2. Loss computation: Calculate the loss value based on predictions and ground truth.
+
+        Args:
+            batch(dict): The input data batch for training.
+
+        Returns:
+            dict: A dictionary containing model outputs and other relevant information.
+        '''
+        raise NotImplementedError
+
+    @abstractmethod
+    def compute_loss(self, output: dict, batch: dict) -> dict:
+        '''
+        Compute the loss for a given batch of data.
+
+        Args:
+            output (dict): The model's output for the given batch.
+            batch (dict): The input data batch.
+
+        Returns:
+            A dictionary containing the computed loss.
+        '''
+        raise NotImplementedError
+
+    def model_predict(self, batch: dict) -> dict:
+        '''
+        Make predictions for a given batch of data (in evaluation).
+        
+        This method can be overridden for custom prediction logic, but by default it simply calls `model_forward` to get the model's output.
+        Args:
+            batch (dict): The input data batch.
+        Returns:
+            A dictionary containing the predictions.
+        '''
+        return {
+            'Y': self.model_forward(batch),
+        }
+    
+    def compute_metrics(self, batch: dict, output: dict) -> dict:
+        '''
+        Computes the metrics for the given batch and model output.
+        Args:
+            output (dict): The model's output for the given batch.
+            batch (dict): The input data batch.
+        Returns:
+            A dictionary containing the computed metrics. For example, it may include precision, recall, and F1 score for classification tasks.
+        '''
+        precision, recall, f1, _ = precision_recall_fscore_support(
+            batch['Y'], output['Y'], 
+            average = 'binary', zero_division = 0
+        )
+        return {
+            'Precision': precision,
+            'Recall': recall,
+            'F1': f1,
+        }
+
+    def optimize(self, loss: dict) -> None:
+        '''
+        Perform optimization step based on the computed total loss.
+        Args:
+            loss (dict): A dictionary containing the computed loss values, where 'total_loss' is the key for the overall loss used for backpropagation.
+        '''
+        self.optimizer.zero_grad()
+        loss['total_loss'].backward()
+        self.optimizer.step()
+
+    def model_construct(self, batch: dict) -> dict:
+        '''
+        Construct health indices (HIs) for a given batch of data (in recording).
+        
+        This method can be overridden for custom construction logic, but by default it simply calls `model_forward` to get the model's output.
+        Args:
+            batch (dict): The input data batch.
+        Returns:
+            A dictionary containing the constructed HIs.
+        '''
+        return self.model_forward(batch)
+
+    # Main
     def train(self):
-        for epoch in range(1,self.args.num_epoch+1):
+        '''
+        Model training framework that iterates over epochs, and calls the appropriate hooks for training and validation stages.
+        '''
+        for epoch in range(1, self.args.num_epoch + 1):
             # Train Stage
             self.train_per_epoch(epoch)
             if self.logger:
                 # Val Stage (log cls metrics)
-                if self.val_loader is not None:
+                if self.val_loader and (epoch % self.args.val_freq == 0):
                     self.val_per_epoch(epoch)
-                # Record HI
-                if self.record_HI_loader is not None:
+                if self.record_HI_loader and (epoch % self.args.record_freq == 0):
                     self.record_per_epoch(epoch)
                 # Log results
                 self.logger.save_metrics(epoch)
                 self.logger.save_checkpoint(self.model, epoch)
 
-    @abstractmethod
-    def train_per_epoch(self,epoch: "int"):
+    # Train
+    def train_per_epoch(self, epoch: int):
+        '''
+        Train the model for one epoch. This method iterates over the training data loader and calls the appropriate hooks for each training stage.
+        '''
+        meta = self.on_train_epoch_start(epoch)
+        for batch_idx, batch in enumerate(self.train_loader):
+            self.before_train_step(batch_idx, batch, meta)
+            result = self.train_step(batch)
+            self.after_train_step(epoch, batch_idx, batch, result, meta)
+        self.on_train_epoch_end(epoch, meta)
+
+    def on_train_epoch_start(self, epoch: int) -> dict:
+        '''
+        Hook called before each training epoch.
+        This method can be used to:
+            1. Set the model to training mode
+            2. Initialize any necessary variables or states for the epoch
+        
+        Args:
+            epoch (int): The current epoch number.
+        Returns:
+            dict: A dictionary containing any necessary information for the training epoch, which can be used across different hooks.
+        '''
+        self.model.train()
+        return {}
+
+    def before_train_step(self, batch_idx: int, batch: dict, meta: dict) -> None:
+        '''
+        Hook called before each training step.
+        This method can be used to:
+            1. Move the batch data to the appropriate device (CPU or GPU) for training.
+            2. Perform any necessary preprocessing on the batch data before it is fed into the model.
+
+        Args:
+            batch_idx (int): The index of the current batch.
+            batch (dict): A dictionary containing the batch data, where values may be torch.Tensors.
+            meta (dict): A dictionary for storing any necessary information for the training epoch.
+        '''
+        self.move_batch_to_device(batch)
+    
+    def train_step(self, batch: dict) -> dict:
+        '''
+        Execute a single training step.
+        This method defines the core training logic for one batch. 
+        Implementations must include three key components:
+            1. Forward pass: Compute model outputs from input data.
+            2. Loss computation: Calculate the loss value based on predictions and ground truth.
+            3. Gradient update: Perform backpropagation and update model parameters.
+
+        Args:
+            batch(dict): The input data batch for training.
+
+        Returns:
+            A dictionary containing the output of the model and the computed loss for the batch. 
+        '''
+        output = self.model_forward(batch)
+        loss = self.compute_loss(output, batch)
+        self.optimize(loss)
+    
+        return {
+            'output': output,
+            'loss': loss,
+        }
+
+    def after_train_step(self, epoch: int, batch_idx: int, batch: dict, result: dict, meta: dict) -> None:
+        '''
+        Hook called after each training step.
+        This method can be used to:
+            1. Log metrics to the logger (batch level)
+            2. Save checkpoints (batch level)
+            3. Verbose training progress (batch level)
+        '''
+        # Record loss
+        if self.logger:
+            for k, v in result['loss'].items():
+                self.logger.record_scalars('Loss/train', k, v)
+
+        # Monitor training progress
+        if (batch_idx + 1) % self.args.print_freq == 0:
+            print(f'Train: Epoch {epoch} batch {batch_idx + 1} Loss {result['loss']['total_loss'].item():.6f}')
+
+    def on_train_epoch_end(self, epoch: int, meta: dict) -> None:
+        '''
+        Hook called after each training epoch.
+        This method can be used to:
+            1. Record metrics (epoch level)
+            2. Save checkpoints (epoch level)
+            3. Verbose training progress (epoch level)
+        '''
         pass
 
-    @torch.no_grad()
-    def val_per_epoch(self,epoch: "int") -> dict:
-        self.model.eval()
+    # Evaluate
+    def val_per_epoch(self, epoch: int) -> dict:
+        '''
+        Validate the model for one epoch. This method iterates over the validation data loader and calls the appropriate hooks for each validation stage.
+        '''
+        meta = self.on_val_epoch_start(epoch)
+        for batch_idx, batch in enumerate(self.val_loader):
+            self.before_val_step(batch_idx, batch, meta)
+            result = self.val_step(batch)
+            self.after_val_step(epoch, batch_idx, batch, result, meta)
+        return self.on_val_epoch_end(epoch, meta)
 
-        # Classification metrics
-        all_y_true = []
-        all_y_pred = []
-        for UUT,t,X,y_true in self.val_loader:
-            X = X.to(self.device)
-            y_pred = self.model.predict(X)
-            all_y_true.append(y_true)
-            all_y_pred.append(y_pred)
-        all_y_true = np.concatenate(all_y_true)
-        all_y_pred = np.concatenate(all_y_pred)
-        precision, recall, f1, _ = precision_recall_fscore_support(all_y_true, all_y_pred, average='binary', zero_division=0)
-        metric_result = {
-            'Precision': precision,
-            'Recall': recall,
-            'F1': f1,
+    def on_val_epoch_start(self, epoch: int) -> dict:
+        '''
+        Hook called before validation epoch.
+        This method can be used to:
+            1. Set the model to evaluation mode.
+            2. Initialize the metrics.
+        
+        Args:
+            epoch (int): The current epoch number.
+        Returns:
+            dict: A dictionary containing any necessary information for the validation epoch, which can be used across different hooks.
+        '''
+        self.model.eval()
+        return {
+            'metrics': {},
+            }
+
+    def before_val_step(self, batch_idx: int, batch: dict, meta: dict) -> None:
+        '''
+        Hook called before each validation step.
+        This method can be used to:
+            1. Move the batch data to the appropriate device (CPU or GPU) for validation
+            2. Perform any additional preprocessing on the batch data before it is fed into the model for validation.
+        Args:
+            batch_idx (int): The index of the current batch.
+            batch (dict): The batch data, which may include features, labels, and other relevant information.
+            meta (dict): A dictionary for storing any necessary information for the validation epoch.
+        '''
+        self.move_batch_to_device(batch)
+
+    def val_step(self, batch: dict) -> dict:
+        '''
+        Execute a single validation step.
+        This method defines the core validation logic for one batch.
+        Implementations must include two key components:
+            1. Forward pass: Computing predictions using the model.
+            2. Metric computation: Calculating the metrics based on the predictions and ground truth labels.
+
+        Args:
+            batch(dict): The input data batch for validation.
+
+        Returns:
+            A dictionary containing the computed metrics.
+        '''
+        output = self.model_predict(batch)
+        metrics = self.compute_metrics(batch, output)
+        return {
+            'output': output,
+            'metrics': metrics,
         }
-        if self.logger:
-            for metric_name,metric in metric_result.items():
-                self.logger.writer.add_scalar(f'Metric/{metric_name}',metric,epoch)
-        return metric_result
+    
+    def after_val_step(self, epoch: int, batch_idx: int, batch: dict, result: dict, meta: dict) -> None:
+        '''
+        Hook called after each validation step.
+        This method can be used to:
+            1. Log metrics to a logger (batch level)
+        '''
+        # Record metrics
+        for metric_name, metric in result['metrics'].items():
+            if metric_name in meta['metrics']:
+                meta['metrics'][metric_name].append(metric)
+            else:
+                meta['metrics'][metric_name] = [metric]
 
-    @torch.no_grad()
-    def record_per_epoch(self,epoch: "int") -> dict:
+    def on_val_epoch_end(self, epoch: int, meta: dict) -> None:
+        '''
+        Hook called after the validation epoch ends.
+        This method can be used to:
+            1. Log metrics to a logger (epoch level)
+        '''
+        for metric_name, metric in meta['metrics'].items():
+            metric = sum(metric) / len(metric)
+            meta['metrics'][metric_name] = metric
+            self.logger.writer.add_scalar(f'Metric/{metric_name}', metric, epoch)
+        return meta
+    # Record
+    def record_per_epoch(self, epoch: int) -> dict:
+        '''
+        Record health indices (HIs). This method iterates over the record data loader and calls the appropriate hooks for each recording stage.
+        '''
+        meta = self.on_record_epoch_start(epoch)
+        for batch_idx, batch in enumerate(self.record_HI_loader):
+            self.before_record_step(batch_idx, batch, meta)
+            result = self.record_step(batch)
+            self.after_record_step(epoch, batch_idx, batch, result, meta)
+        return self.on_record_epoch_end(epoch, meta)
+
+    def on_record_epoch_start(self, epoch: int) -> dict:
+        '''
+        Hook called before recording epoch.
+        This method can be used to:
+            1. Set the model to evaluation mode.
+            2. Initialize the metrics.
+        
+        Args:
+            epoch (int): The current epoch number.
+        Returns:
+            dict: A dictionary containing any necessary information for the recording epoch, which can be used across different hooks.
+        '''
         self.model.eval()
+        return {
+            'hi_dict': {},
+        }
+    
+    def before_record_step(self, batch_idx: int, batch: dict, meta: dict) -> None:
+        self.move_batch_to_device(batch)
+    
+    def record_step(self, batch: dict) -> dict:
+        '''
+        Execute a single recording step.
+        This method defines the core recording logic for one batch.
+        Implementations must include two key components:
+            1. Forward pass: Computing predictions using the model.
+            2. HI computation: Calculating the HI based on the predictions and ground truth labels.
 
-        # Record HI
-        hi_dict = {}
-        for UUT,t,X,y_true in self.record_HI_loader:
-            if UUT in self.record_UUTs:
-                X = X.to(self.device)
-                hi = self.model(X).detach().numpy()
-                hi_dict[UUT] = hi
+        Args:
+            batch(dict): The input data batch for recording.
+        '''
+        return {
+            'output': self.model_construct(batch),
+        }
 
-        # Plot selected HI
-        if self.logger and (epoch % self.args.record_freq == 0):
-            fig = plot_hi(hi_dict,self.record_UUTs)
-            self.logger.writer.add_figure(f'HI/{self.args.record_HI}',fig,epoch)
+    def after_record_step(self, epoch: int, batch_idx: int, batch: dict, result: dict, meta: dict) -> None:
+        '''
+        Hook called after each recording step.
+        This method can be used to:
+            1. Log metrics to a logger (batch level)
+        '''
+        batch_hi = result['output']['hi'].detach().numpy()
+        batch_UUT, lengths = batch['UUT'], batch['lengths']
+        for UUT, hi, length in zip(batch_UUT, batch_hi, lengths):
+            meta['hi_dict'][UUT] = hi[:length]
+    
+    def on_record_epoch_end(self, epoch: int,  meta: dict) -> dict:
+        '''
+        Hook called after the recording epoch ends.
+        This method can be used to:
+            1. Log metrics to a logger (epoch level)
+        '''
+        fig = plot_hi(meta['hi_dict'])
+        self.logger.writer.add_figure(f'HI/{self.args.record_HI}', fig, epoch)
+        return meta
 
-        return hi_dict
 
 
-
+@TRAINER_REGISTRY('Base')
 class BaseRTFTrainer(BaseTrainer):
     '''BaseRTF Model Trainer'''
 
     def get_model(self):
-        if self.args.load_model_fp:
-            self.model = torch.load(self.args.load_model_fp, map_location=self.device, weights_only=False)
-        else:
-            self.model = BaseRTF(self.args, self.ls_dict.index)
-        # example_input = torch.randn((self.args.input_size,20))
-        # self.logger.writer.add_graph(self.model,example_input)
+        super().get_model()
+        self.mfe_loss = MFELoss_1ParamBrownian(n_UUT=len(self.ls_dict))
 
-    def train_per_epoch(self, epoch):
-        # Switch to train mode
-        self.model.train()
+    def get_optimizer(self):
+        super().get_optimizer()
+        self.optimizer.add_param_group({'params': self.mfe_loss.parameters(), 'weight_decay': self.args.weight_decay})
 
-        for i, (UUT, t, X, y_true) in enumerate(self.train_loader):
-            X = X.to(self.device)
-            y_true = y_true.to(self.device)
-            hi, p = self.model(X)
+    def on_train_epoch_start(self, epoch):
+        meta = super().on_train_epoch_start(epoch)
+        self.mfe_loss.train()
+        return meta
 
-            # Compute loss
-            loss = self.compute_loss(hi, p, y_true, UUT)
-            # Get the item for backward
-            total_loss = loss['total_loss']
-
-            # Compute gradient and do Adam step
-            self.optimizer.zero_grad()
-            total_loss.backward()
-            self.optimizer.step()
-            self.constrain_parameters()
-
-            # Fit prior distribution
-            self.model.fit_prior_dist()
-
-            # Record loss
-            if self.logger:
-                for k,v in loss.items():
-                    self.logger.record_scalars('Loss/train', k, v)
-
-            # Monitor training progress
-            if (i+1) % self.args.print_freq == 0:
-                print(f'Train: Epoch {epoch} batch {i+1} Loss {total_loss.item():.6f}')
-
-    @torch.no_grad()
-    def record_per_epoch(self,epoch):
-        self.model.eval()
-
-        # Record HI
-        hi_dict = {}
-        for UUT,t,X,y_true in self.record_HI_loader:
-            X = X.to(self.device)
-            hi,p = self.model(X)
-            hi_dict[UUT] = hi.detach().numpy()
-        if self.logger:
-            # Log parameters
-            self.logger.writer.add_histogram('theta/train',self.model.theta_train,epoch)
-            self.logger.writer.add_scalar('sigma_square',self.model.sigma_square,epoch)
-
-            # Test for normality
-            nt_summary = test4norm(hi_dict)
-            for test_name, test_result in nt_summary.items():
-                self.logger.writer.add_scalar(f'NomalTest/{self.args.record_HI}_{test_name}',test_result,epoch)
-
-            # Plot selected HI
-            if epoch % self.args.record_freq == 0:
-                fig = plot_hi(hi_dict,self.record_UUTs)
-                self.logger.writer.add_figure(f'HI/{self.args.record_HI}',fig,epoch)
-
-        return hi_dict
-
-    def compute_loss(self, hi, p, y_true, UUT):
-        cls_loss = self.args.cls_loss_weight * FocalLoss(p, y_true, alpha = self.args.FocalLoss_alpha, gamma = self.args.FocalLoss_gamma, reduction='mean')
-        mfe_loss = self.args.mfe_loss_weight * self.model.mfe_loss(hi, UUT, reduction = 'mean')
+    def model_forward(self, batch):
+        hi, mask = self.model(batch['X'], batch['lengths'])
+        return {
+            'hi': hi,
+            'mask': mask,
+        }
+    
+    def compute_loss(self, output, batch):
+        hi, mask = output['hi'], output['mask']
+        lengths = batch['lengths']
+        indice = torch.tensor(self._UUT2idx(batch['UUT']))
+        cls_loss = FocalLoss(hi, batch['Y'], alpha = self.args.FocalLoss_alpha, gamma = self.args.FocalLoss_gamma, reduction = 'none')
+        cls_loss = self.args.cls_loss_weight * (cls_loss / lengths).masked_select(mask).sum()
+        mfe_loss = self.mfe_loss(hi, indice, reduction = 'none')
+        mfe_loss = self.args.mfe_loss_weight * (mfe_loss / lengths).masked_select(mask).sum()
 
         total_loss = cls_loss + mfe_loss
-        loss = {
+        return {
             'cls_loss': cls_loss,
             'mfe_loss': mfe_loss,
             'total_loss': total_loss
         }
-        return loss
+
+    def after_train_step(self, epoch, batch_idx, batch, result, meta):
+        self.constrain_parameters()
+        super().after_train_step(epoch, batch_idx, batch, result, meta)
+
+    def on_train_epoch_end(self, epoch, meta):
+        super().on_train_epoch_end(epoch, meta)
+        # Log parameters
+        if self.logger:
+            self.logger.writer.add_histogram('theta/train',self.mfe_loss.theta_train, epoch)
+            self.logger.writer.add_scalar('sigma_square',self.mfe_loss.sigma_square, epoch)
+
+    def on_val_epoch_start(self, epoch):
+        meta = super().on_val_epoch_start(epoch)
+        self.mfe_loss.eval()
+        return meta
+
+    def model_predict(self, batch):
+        Y_pred, mask = self.model.predict(batch['X'], batch['lengths'])
+        return {
+            'Y': Y_pred,
+            'mask': mask,
+        }
+
+    def compute_metrics(self, batch, output):
+        Y_pred, mask = output['Y'], output['mask']
+        Y_pred = Y_pred.masked_select(mask).detach()
+        Y_true = batch['Y'].masked_select(mask).detach()
+        precision, recall, f1, _ = precision_recall_fscore_support(
+            Y_true, Y_pred, 
+            average = 'binary', zero_division = 0
+        )
+        return {
+            'Precision': precision,
+            'Recall': recall,
+            'F1': f1,
+        }
+
+    def on_record_epoch_end(self, epoch, meta):
+        meta = super().on_record_epoch_end(epoch, meta)
+        # Test for normality
+        nt_summary = test4norm(meta['hi_dict'])
+        for test_name, test_result in nt_summary.items():
+            self.logger.writer.add_scalar(f'NomalTest/{self.args.record_HI}_{test_name}',test_result,epoch)
+        meta['nt_summary'] = nt_summary
+        return meta
 
     def constrain_parameters(self):
         # Constrain sigma_square to be big enough
-        self.model.sigma_square.data.clamp_(min=0.1)
+        self.mfe_loss.sigma_square.data.clamp_(min = 0.1)
 
 
 
-class BaseTWTrainer(BaseRTFTrainer):
-    '''BaseTW Model Trainer'''
-
-    def get_model(self):
-        if self.args.load_model_fp:
-            self.model = torch.load(self.args.load_model_fp, map_location=self.device, weights_only=False)
-        else:
-            self.model = BaseTW(self.args, self.ls_dict.index)
-        # example_input = torch.randn((self.args.window_width,self.args.input_size,))
-        # self.logger.writer.add_graph(self.model,example_input)
-
-    def get_loss_wa_coef(self):
-        # Coefficients of Weighted-Average(WA) of loss for each UUT.
-        super().get_loss_wa_coef()
-        self.cls_loss_wa_coef = torch.FloatTensor(1/(self.ls_dict.values-self.args.window_width+1))
-        self.mfe_loss_wa_coef = torch.FloatTensor(1/(self.ls_dict.values-self.args.window_width))
-
-    def train_per_epoch(self, epoch):
-        self.model.train()
-
-        for i, (start, end, UUT, t, (X_pre, X_cur), (y_pre, y_cur)) in enumerate(self.train_loader):
-            X_pre = X_pre.to(self.device)
-            X_cur = X_cur.to(self.device)
-            y_pre = y_pre.to(self.device)
-            y_cur = y_cur.to(self.device)
-
-            hi_pre, p_pre = self.model(X_pre)
-            hi_cur, p_cur = self.model(X_cur)
-
-            # Compute loss
-            loss = self.compute_loss(start, end, hi_pre, hi_cur, p_pre, p_cur, y_pre, y_cur, UUT)
-            # Get the item for backward
-            total_loss = loss['total_loss']
-
-            # Compute gradient and do Adam step
-            self.optimizer.zero_grad()
-            total_loss.backward()
-            self.optimizer.step()
-            self.constrain_parameters()
-
-            # Fit prior distribution
-            self.model.fit_prior_dist()
-
-            # Record loss
-            if self.logger:
-                for k,v in loss.items():
-                    self.logger.record_scalars('Loss/train', k, v)
-
-            # Monitor training progress
-            if (i+1) % self.args.print_freq == 0:
-                print(f'Train: Epoch {epoch} batch {i+1} Loss {total_loss.item():.6f}')
-
-    def compute_loss(self, start, end, hi_pre, hi_cur, p_pre, p_cur, y_pre, y_cur, UUT):
-        indices = self._UUT2idx(UUT)
-        cls_loss_wa_coef = self.cls_loss_wa_coef[indices]
-        mfe_loss_wa_coef = self.mfe_loss_wa_coef[indices]
-
-        cls_loss_start = cls_loss_wa_coef[start]@FocalLoss(p_pre[start], y_pre[start], alpha = self.args.FocalLoss_alpha, gamma = self.args.FocalLoss_gamma, reduction='none')
-        cls_loss_cur= cls_loss_wa_coef@FocalLoss(p_cur, y_cur, alpha = self.args.FocalLoss_alpha, gamma = self.args.FocalLoss_gamma, reduction='none')
-        cls_loss = self.args.cls_loss_weight * (cls_loss_start + cls_loss_cur)
-
-        mfe_loss = self.args.mfe_loss_weight * (mfe_loss_wa_coef@self.model.mfe_loss(hi_pre, hi_cur, UUT, reduction = 'none'))
-
+@TRAINER_REGISTRY('MS')
+class MSRTFTrainer(BaseRTFTrainer):
+    '''MSRTF Model Trainer'''
+    def model_forward(self, batch):
+        logits, hi, cls_mask, mfe_mask = self.model(batch['X'], batch['lengths'])
+        return {
+            'logits': logits,
+            'hi': hi,
+            'cls_mask': cls_mask,
+            'mfe_mask': mfe_mask,
+        }
+    
+    def compute_loss(self, output, batch):
+        logits, hi, cls_mask, mfe_mask = output['logits'], output['hi'], output['cls_mask'], output['mfe_mask']
+        indice = torch.tensor(self._UUT2idx(batch['UUT']))
+        cls_loss = FocalLoss(logits, batch['Y'], alpha = self.args.FocalLoss_alpha, gamma = self.args.FocalLoss_gamma, reduction = 'none')
+        cls_loss = self.args.cls_loss_weight * cls_loss.masked_select(cls_mask).mean()
+        mfe_loss = self.mfe_loss(hi, indice, reduction = 'none')
+        mfe_loss = self.args.mfe_loss_weight * mfe_loss.masked_select(mfe_mask).mean()
         total_loss = cls_loss + mfe_loss
-        loss = {
+        return {
             'cls_loss': cls_loss,
             'mfe_loss': mfe_loss,
             'total_loss': total_loss
         }
-        return loss
+
+    def on_train_epoch_end(self, epoch, meta):
+        super().on_train_epoch_end(epoch, meta)
+        if self.logger:
+            for param, value in self.model.hi_transformer.named_parameters(recurse = False):
+                self.logger.writer.add_scalar(f'LLT/{param}', value, epoch)
+
+    def after_record_step(self, epoch, batch_idx, batch, result, meta):
+        hi_lengths = result['output']['mfe_mask'].sum(dim=-1)
+        batch_hi = result['output']['hi'].detach().numpy()
+        batch_UUT = batch['UUT']
+        for UUT, hi, hi_length in zip(batch_UUT, batch_hi, hi_lengths):
+            meta['hi_dict'][UUT] = hi[:hi_length]
+
+    # def constrain_parameters(self):
+    #     super().constrain_parameters()
+    #     self.model.hi_transformer.c1.data.clamp_(max=11)
+    #     self.model.hi_transformer.c2.data.clamp_(max=0.1)
 
 
 
+@TRAINER_REGISTRY('SC')
 class SCTrainer(BaseTrainer):
     '''SC Model Trainer'''
-
-    def get_model(self):
-        if self.args.load_model_fp:
-            self.model = torch.load(self.args.load_model_fp, map_location=self.device, weights_only=False)
-        else:
-            self.model = SC_DNN(self.args)
-        # example_input = torch.randn((self.args.input_size,))
-        # self.logger.writer.add_graph(self.model,example_input)
 
     def get_loss_wa_coef(self):
         super().get_loss_wa_coef()
         self.mon_loss_wa_coef = torch.FloatTensor(1/(self.ls_dict.values-1))
         self.con_loss_wa_coef = torch.FloatTensor(1/(self.ls_dict.values-2))
 
-    def train_per_epoch(self, epoch):
-        # Switch to train mode
-        self.model.train()
+    def on_train_epoch_start(self, epoch):
+        meta = super().on_train_epoch_start(epoch)
+        meta['Y'] = []
+        meta['hi'] = []
+        meta['start'] = None
+        meta['end'] = None
+        return meta
+    
+    def before_train_step(self, batch_idx, batch, meta):
+        super().before_train_step(batch_idx, batch, meta)
+        start, (y_ppre, y_pre, y_cur) = batch['start'], batch['Y']
+        meta['Y'].extend([y_ppre[start], y_pre[start], y_cur])
 
-        all_y = []
-        all_hi = []
-        for i, (start, end, UUT, t, (X_ppre, X_pre, X_cur), (y_ppre, y_pre, y_cur)) in enumerate(self.train_loader):
-            X_ppre = X_ppre.to(self.device)
-            X_pre = X_pre.to(self.device)
-            X_cur = X_cur.to(self.device)
-            # y_true = y_true.to(self.device)
+    def model_forward(self, batch):
+        return {
+            'hi_ppre': self.model(batch['X'][0]),
+            'hi_pre': self.model(batch['X'][1]),
+            'hi_cur': self.model(batch['X'][2])
+        }
 
-            hi_ppre = self.model(X_ppre)
-            hi_pre = self.model(X_pre)
-            hi_cur = self.model(X_cur)
-
-            loss = self.compute_loss(start, end, hi_ppre, hi_pre, hi_cur, UUT) # unsupervised Learning
-
-            total_loss = loss['total_loss']
-
-            self.optimizer.zero_grad()
-            total_loss.backward()
-            self.optimizer.step()
-
-            if self.logger:
-                for k,v in loss.items():
-                    self.logger.record_scalars('Loss/train', k, v)
-
-            if (i+1) % self.args.print_freq == 0:
-                print(f'Train: Epoch {epoch} batch {i+1} Loss {total_loss.item():.6f}')
-            
-            all_y.extend([y_ppre[start],y_pre[start],y_cur])
-            all_hi.extend([hi_ppre[start].detach(),hi_pre[start].detach(),hi_cur.detach()])
-        all_y = torch.concat(all_y)
-        all_hi = torch.concat(all_hi)
-        self.model.fit(all_hi,all_y)
-
-    def compute_loss(self, start, end, hi_ppre, hi_pre, hi_cur, UUT):
-        indices = self._UUT2idx(UUT)
+    def compute_loss(self, output, batch):
+        start, end = batch['start'], batch['end']
+        indices = self._UUT2idx(batch['UUT'])
         mon_loss_wa_coef = self.mon_loss_wa_coef[indices]
         con_loss_wa_coef = self.con_loss_wa_coef[indices]
 
-        mvf_loss = self.args.mvf_loss_weight * MVFLoss(hi_cur[end], self.args.MVFLoss_m, reduction="sum")
-
-        mon_loss_start = mon_loss_wa_coef[start]@MONLoss(hi_ppre[start],hi_pre[start], c=self.args.MONLoss_c, reduction="none")
-        mon_loss_cur = mon_loss_wa_coef@MONLoss(hi_pre,hi_cur, c=self.args.MONLoss_c, reduction="none")
+        hi_ppre, hi_pre, hi_cur = output['hi_ppre'], output['hi_pre'], output['hi_cur']
+        mvf_loss = self.args.mvf_loss_weight * MVFLoss(hi_cur[end], self.args.MVFLoss_m, reduction='sum')
+        mon_loss_start = mon_loss_wa_coef[start]@MONLoss(hi_ppre[start],hi_pre[start], c=self.args.MONLoss_c, reduction='none')
+        mon_loss_cur = mon_loss_wa_coef@MONLoss(hi_pre,hi_cur, c=self.args.MONLoss_c, reduction='none')
         mon_loss = self.args.mon_loss_weight * (mon_loss_start + mon_loss_cur)
-        con_loss = self.args.con_loss_weight * (con_loss_wa_coef@CONLoss(hi_ppre,hi_pre,hi_cur, c=self.args.CONLoss_c, reduction="none"))
+        con_loss = self.args.con_loss_weight * (con_loss_wa_coef@CONLoss(hi_ppre,hi_pre,hi_cur, c=self.args.CONLoss_c, reduction='none'))
 
         total_loss = mvf_loss + mon_loss + con_loss
-        loss = {
+        return {
             'mvf_loss': mvf_loss,
             'con_loss': con_loss,
             'mon_loss': mon_loss,
             'total_loss': total_loss
         }
-        return loss
+
+    def after_train_step(self, epoch, batch_idx, batch, result, meta):
+        super().after_train_step(epoch, batch_idx, batch, result, meta)
+        start = batch['start']
+        hi_ppre, hi_pre, hi_cur = result['output']['hi_ppre'], result['output']['hi_pre'], result['output']['hi_cur']
+        meta['hi'].extend([hi_ppre[start].detach(), hi_pre[start].detach(), hi_cur.detach()])
+
+    def on_train_epoch_end(self, epoch, meta):
+        super().on_train_epoch_end(epoch, meta)
+        all_y = np.concatenate(meta['Y'])
+        all_hi = np.concatenate(meta['hi'])
+        self.model.cls_model.fit(all_hi[:,None],all_y[:,None])
+
+    def model_predict(self, batch: dict) -> dict:
+        hi = self.model(batch['X']).detach()
+        Y_pred = self.model.cls_model.predict(hi.unsqueeze(-1))
+        return {
+            'Y': Y_pred,
+        }   
+    
+    def model_construct(self, batch):
+        return {
+            'hi': self.model(batch['X']),
+        }
 
 
-
+@TRAINER_REGISTRY('Integrated')
 class IntegratedTrainer(BaseTrainer):
     '''Integrated Model Trainer'''
-
+    
     def get_model(self):
-        if self.args.load_model_fp:
-            self.model = torch.load(self.args.load_model_fp, map_location=self.device, weights_only=False)
-        else:
-            self.model = Integrated_DNN_LSTM(self.args, self.ls_dict.index)
-        # example_input = torch.randn((self.args.input_size,20))
-        # self.logger.writer.add_graph(self.model,example_input)
+        super().get_model()
+        self.mfe_loss = MFELoss_LSTM(n_UUT = len(self.ls_dict),
+                                    lstm_hidden_size = self.args.lstm_hidden_size,
+                                    num_lstm_layers = self.args.num_lstm_layers,
+                                    lstm_dropout = self.args.lstm_dropout)
 
-    def train_per_epoch(self, epoch):
-        self.model.train()
+    def get_optimizer(self):
+        super().get_optimizer()
+        self.optimizer.add_param_group({'params': self.mfe_loss.parameters(), 'weight_decay': self.args.weight_decay})
 
-        all_y = []
-        all_hi = []
-        for i, (UUT, t, X, y_true) in enumerate(self.train_loader):
-            t = t.to(self.device)
-            X = X.to(self.device)
-            y_true = y_true.to(self.device)
+    def on_train_epoch_start(self, epoch):
+        meta = super().on_train_epoch_start(epoch)
+        self.mfe_loss.train()
+        meta['Y'] = []
+        meta['hi'] = []
+        return meta
 
-            hi = self.model(X)
+    def before_train_step(self, batch_idx, batch, meta):
+        super().before_train_step(batch_idx, batch, meta)
+        mask = torch.arange(batch['X'].shape[1]) < batch['lengths'].unsqueeze(1)
+        batch['mask'] = mask
+        meta['Y'].append(batch['Y'].masked_select(mask))
 
-            loss = self.compute_loss(hi, t, UUT)
+    def model_forward(self, batch):
+        return {
+            'hi': self.model(batch['X']),
+        }
 
-            total_loss = loss['total_loss']
+    def compute_loss(self, output, batch):
+        UUT, t, lengths = batch['UUT'], batch['t'], batch['lengths']
+        hi, mask = output['hi'], batch['mask']
+        indices = self._UUT2idx(UUT)
+        batch_size = hi.shape[0]
 
-            self.optimizer.zero_grad()
-            total_loss.backward()
-            self.optimizer.step()
+        mfe_loss = self.mfe_loss(hi, t, indices, lengths, reduction='none')
+        mfe_loss = self.args.mfe_loss_weight * mfe_loss.masked_select(mask).mean() / 2
 
-            if self.logger:
-                for k,v in loss.items():
-                    self.logger.record_scalars('Loss/train', k, v)
+        last_indices = (lengths - 1).unsqueeze(1)
+        mvf_loss = self.args.mvf_loss_weight * MVFLoss(hi.gather(1, last_indices), self.args.MVFLoss_m, reduction="mean")
 
-            if (i+1) % self.args.print_freq == 0:
-                print(f'Train: Epoch {epoch} batch {i+1} Loss {total_loss.item():.6f}')
-            
-            all_y.append(y_true)
-            all_hi.append(hi.detach())
-        all_y = torch.concat(all_y)
-        all_hi = torch.concat(all_hi)
-        self.model.fit(all_hi,all_y)
+        mon_loss = MONLoss(hi, c=self.args.MONLoss_c, reduction="none") / (last_indices * batch_size)
+        mon_loss = self.args.mon_loss_weight * mon_loss.masked_select(mask[:, 1:]).sum()
 
-    def compute_loss(self, hi, t, UUT):
-        mfe_loss = self.args.mfe_loss_weight * self.model.mfe_loss(hi, t, UUT, reduction = 'mean')
-        mvf_loss = self.args.mvf_loss_weight * MVFLoss(hi[-1], self.args.MVFLoss_m, reduction="none")
-        mon_loss = self.args.mon_loss_weight * MONLoss(hi, c=self.args.MONLoss_c, reduction="mean")
-        con_loss = self.args.mon_loss_weight * CONLoss(hi, c=self.args.CONLoss_c, reduction="mean")
+        con_loss = CONLoss(hi, c=self.args.CONLoss_c, reduction="none") / ((last_indices - 1) * batch_size)
+        con_loss = self.args.con_loss_weight * con_loss.masked_select(mask[:, 2:]).sum()
 
         total_loss = mfe_loss + mvf_loss + mon_loss + con_loss
         loss = {
@@ -470,58 +757,43 @@ class IntegratedTrainer(BaseTrainer):
             'total_loss': total_loss
         }
         return loss
+    
+    def after_train_step(self, epoch, batch_idx, batch, result, meta):
+        super().after_train_step(epoch, batch_idx, batch, result, meta)
+        meta['hi'].append(result['output']['hi'].masked_select(batch['mask']).detach())
 
+    def on_train_epoch_end(self, epoch, meta):
+        super().on_train_epoch_end(epoch, meta)
+        all_y = np.concatenate(meta['Y'])
+        all_hi = np.concatenate(meta['hi'])
+        self.model.cls_model.fit(all_hi[:, None], all_y[:, None])
 
+    def model_predict(self, batch: dict) -> dict:
+        hi = self.model(batch['X']).detach().masked_select(batch['mask'])
+        Y_pred = self.model.cls_model.predict(hi.unsqueeze(-1))
+        return {
+            'Y': Y_pred,
+        }
 
-class MSRTFTrainer(BaseRTFTrainer):
-    '''MSRTF Model Trainer'''
+    def compute_metrics(self, batch, output):
+        Y_true, Y_pred = batch['Y'] ,output['Y']
+        precision, recall, f1, _ = precision_recall_fscore_support(
+            Y_true, Y_pred, 
+            average = 'binary', zero_division = 0
+        )
+        return {
+            'Precision': precision,
+            'Recall': recall,
+            'F1': f1,
+        }
 
-    def get_model(self):
-        if self.args.load_model_fp:
-            self.model = torch.load(self.args.load_model_fp, map_location=self.device, weights_only=False)
-        else:
-            self.model = MSRTF(args=self.args, train_UUTs=self.ls_dict.index)
-        # example_input = torch.randn((self.args.input_size,20))
-        # self.logger.writer.add_graph(self.model,example_input)
+    def on_val_epoch_start(self, epoch):
+        meta = super().on_val_epoch_start(epoch)
+        self.mfe_loss.eval()
+        return meta
 
-    @torch.no_grad()
-    def record_per_epoch(self,epoch):
-        self.model.eval()
-
-        # Record HI
-        hi_dict = {}
-        deg_hi_dict = {}
-        for UUT,t,X,y_true in self.record_HI_loader:
-            X = X.to(self.device)
-            hi,p = self.model(X)
-            hi_dict[UUT] = hi.detach().numpy()
-            deg_hi_dict[UUT] = self.model.transform_deg_hi(hi).detach().numpy()
-
-        if self.logger:
-            # Log parameters
-            self.logger.writer.add_histogram('theta/train',self.model.theta_train,epoch)
-            self.logger.writer.add_scalar('sigma_square',self.model.sigma_square,epoch)
-            for param, value in self.model.hi_transformer.named_parameters(recurse=False):
-                self.logger.writer.add_scalar(f'LLT/{param}', value, epoch)
-            if self.args.MS_flex_type is not None:
-                for param, value in self.model.get_flex_coef.named_parameters(recurse=False):
-                    self.logger.writer.add_scalar(f'{self.args.MS_flex_type}/{param}',value,epoch)
-
-            # Test for normality
-            nt_summary = test4norm(deg_hi_dict)
-            for test_name, test_result in nt_summary.items():
-                self.logger.writer.add_scalar(f'NomalTest/{self.args.record_HI}_{test_name}',test_result,epoch)
-
-            # Plot selected HI
-            if epoch % self.args.record_freq == 0:
-                hi_fig = plot_hi(hi_dict,self.record_UUTs)
-                self.logger.writer.add_figure(f'HI/{self.args.record_HI}',hi_fig,epoch)
-                deg_hi_fig = plot_hi(deg_hi_dict,self.record_UUTs)
-                self.logger.writer.add_figure(f'deg_HI/{self.args.record_HI}',deg_hi_fig,epoch)
-
-        return hi_dict, deg_hi_dict
-
-    # def constrain_parameters(self):
-    #     super().constrain_parameters()
-    #     self.model.hi_transformer.c1.data.clamp_(max=11)
-    #     self.model.hi_transformer.c2.data.clamp_(max=0.1)
+    def before_val_step(self, batch_idx, batch, meta):
+        super().before_val_step(batch_idx, batch, meta)
+        mask = torch.arange(batch['X'].shape[1]) < batch['lengths'].unsqueeze(1)
+        batch['Y'] = batch['Y'].masked_select(mask)
+        batch['mask'] = mask

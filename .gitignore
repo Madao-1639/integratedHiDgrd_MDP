@@ -25,6 +25,9 @@ __pycache__/
 report.md
 to-do.md
 
+.qoder/
+AGENTS.md
+
 *NoiseAfterScale*
 *ShareData*
 *MultiVal*
