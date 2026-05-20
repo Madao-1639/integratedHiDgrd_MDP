@@ -10,13 +10,14 @@ def gen_hp(trial,args):
     # Generate hyperparams
         # NAS (Neural Architecture Search)
     # n_layers = trial.suggest_int('num_hidden_layers', 1, 2)
-    # n_layers = 2
-    # hidden_sizes = [trial.suggest_int(f'hidden_size_{layer}', 3, 12) for layer in range(1,n_layers+1)]
+    n_layers = 2
+    hidden_sizes = [trial.suggest_int(f'hidden_size_{layer}', 3, 100, log = True) for layer in range(1,n_layers+1)]
         # Other hyperparams
     params = {
         # 'dnn_hidden_sizes': hidden_sizes,
         # 'lstm_hidden_size':trial.suggest_int('lstm_hidden_size', 8, 64, log = True),
-        'mfe_loss_weight': trial.suggest_float('mfe_loss_weight', 1e-3, 1e-1, log = True),
+        'lstm_hidden_sizes': hidden_sizes,
+        # 'mfe_loss_weight': trial.suggest_float('mfe_loss_weight', 1e-3, 1e-1, log = True),
         # 'mvf_loss_weight': trial.suggest_float('mvf_loss_weight', 0.8, 1.2),
         # 'mon_loss_weight': trial.suggest_float('mon_loss_weight', 0.1, 0.8),
         # 'con_loss_weight': trial.suggest_float('con_loss_weight', 0.01, 0.5, log = True),

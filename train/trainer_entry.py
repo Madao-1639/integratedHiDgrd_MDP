@@ -1,4 +1,4 @@
-from .trainer import BaseRTFTrainer,BaseTWTrainer,SCTrainer,IntegratedTrainer,MSRTFTrainer#,MSTWTrainer
+from .trainer import BaseRTFTrainer,BaseTWTrainer,SCTrainer,IntegratedTrainer,MSRTFTrainer,LSTMsTrainer#,MSTWTrainer
 from utils.preprocessing import read_preprocess_data
 from utils.preprocessing import read_preprocess_data_NoiseAfterScale
 
@@ -17,6 +17,8 @@ def select_trainer_by_type(model_type, data_type=None):
             return MSRTFTrainer
         # elif data_type == 'TW':
         #     return MSTWTrainer
+    elif model_type == 'LSTMs':
+        return LSTMsTrainer
 
 def get_trainer(args,data=None,**trainer_kwargs):
     '''

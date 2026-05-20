@@ -12,8 +12,9 @@ from sklearn.metrics import precision_recall_fscore_support
 
 from torch.utils.data import DataLoader
 from utils.data import select_loader
-from model import BaseRTF, BaseTW, SC_DNN, Integrated_DNN_LSTM, MSRTF#, MSTW
+from model import BaseRTF, BaseTW, SC_DNN, Integrated_DNN_LSTM, MSRTF, StackedLSTM#, MSTW
 from loss import FocalLoss,MVFLoss,MONLoss,CONLoss
+import torch.nn.functional as F
 from utils.logger import Logger
 from utils.utils import test4norm, plot_hi
 
@@ -525,3 +526,39 @@ class MSRTFTrainer(BaseRTFTrainer):
     #     super().constrain_parameters()
     #     self.model.hi_transformer.c1.data.clamp_(max=11)
     #     self.model.hi_transformer.c2.data.clamp_(max=0.1)
+
+class LSTMsTrainer(BaseTrainer):
+    '''StackedLSTM Model Trainer'''
+
+    def get_model(self):
+        if self.args.load_model_fp:
+            self.model = torch.load(self.args.load_model_fp, map_location=self.device, weights_only=False)
+        else:
+            self.model = StackedLSTM(self.args)
+        # example_input = torch.randn((self.args.input_size,20))
+        # self.logger.writer.add_graph(self.model,example_input)
+
+    def train_per_epoch(self, epoch):
+        # Switch to train mode
+        self.model.train()
+
+        for i, (UUT, t, X, y_true) in enumerate(self.train_loader):
+            X = X.to(self.device)
+            y_true = y_true.to(self.device)
+            logits = self.model(X)
+
+            # Compute loss
+            loss = F.binary_cross_entropy_with_logits(logits, y_true)
+
+            # Compute gradient and do Adam step
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step()
+
+            # Record loss
+            if self.logger:
+                self.logger.record_scalars('Loss/train', 'cls_loss', loss)
+
+            # Monitor training progress
+            if (i+1) % self.args.print_freq == 0:
+                print(f'Train: Epoch {epoch} batch {i+1} Loss {loss.item():.6f}')
